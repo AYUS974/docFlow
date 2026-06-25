@@ -1580,7 +1580,8 @@ export function PdfEditor() {
             </DropdownMenuItem>
             <DropdownMenuItem onClick={handleProtect} disabled={!!processing} className="gap-2 cursor-pointer">
               <Shield className="w-4 h-4" /><div><div className="text-sm font-medium">Password Protect</div><div className="text-xs text-muted-foreground">Encrypt with password</div></div>
-            </DropdownMenuSeparator>
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
             <DropdownMenuItem onClick={handlePrint} className="gap-2 cursor-pointer">
               <Printer className="w-4 h-4" /><div className="text-sm font-medium">Print Page</div>
             </DropdownMenuItem>
