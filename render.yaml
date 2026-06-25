@@ -1,6 +1,9 @@
-# Render Blueprint — deploys DocFlow as two services on Render.
-# Web (Next.js) is public; the PDF engine is a private service reachable only
-# over Render's internal network. Mirrors docker-compose.yml.
+# Render Blueprint — ALL-FREE setup (two free web services).
+#
+# Trade-offs of the free tier (accepted on purpose):
+#   - services sleep after ~15 min idle -> ~50s cold start on next request
+#   - NO persistent disk -> uploaded documents are lost on restart/sleep
+#   - 512 MB RAM each -> basic PDF ops work; LibreOffice/OCR may OOM
 #
 # To deploy: Render Dashboard -> New -> Blueprint -> connect this repo.
 services:
@@ -11,31 +14,30 @@ services:
     dockerfilePath: ./Dockerfile.web
     dockerContext: .
     region: singapore
-    plan: starter            # 512 MB; bump if builds/usage need more
+    plan: free
     healthCheckPath: /
-    # Persistent disk so uploaded documents survive restarts/deploys.
-    # storage.ts writes to STORAGE_DIR; we mount the disk there.
-    disk:
-      name: docflow-data
-      mountPath: /data
-      sizeGB: 1
     envVars:
       - key: NODE_ENV
         value: production
-      - key: STORAGE_DIR
-        value: /data
-      # Internal URL of the private PDF service (name:port on Render's network).
+      # Force Next's standalone server to bind 0.0.0.0 (else Docker's auto-set
+      # HOSTNAME makes it unreachable -> 502).
+      - key: HOSTNAME
+        value: "0.0.0.0"
+      # pdf-svc is a separate free web service -> reach it over its public URL.
+      # IMPORTANT: if Render gives pdf-svc a different URL (name collision),
+      # update this value in the dashboard after the first deploy.
       - key: PDF_SVC_URL
-        value: http://docflow-pdf-svc:8000
+        value: https://docflow-pdf-svc.onrender.com
 
-  # ---- Python PDF engine (private, internal-only) -------------------------
-  - type: pserv
+  # ---- Python PDF engine (also a free web service) ------------------------
+  - type: web
     name: docflow-pdf-svc
     runtime: docker
     dockerfilePath: ./pdf-svc/Dockerfile
     dockerContext: ./pdf-svc
     region: singapore
-    plan: standard           # LibreOffice/OCR are RAM-hungry; 2 GB recommended
+    plan: free
+    healthCheckPath: /health
     envVars:
       - key: PORT
         value: "8000"

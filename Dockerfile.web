@@ -19,6 +19,11 @@ FROM node:20-slim AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 ENV PORT=3000
+# Next's standalone server binds to process.env.HOSTNAME. Docker auto-sets
+# HOSTNAME to the container id, so without this it binds to the wrong address
+# and the platform (Render/Fly/etc.) gets a 502. Force it to listen on all
+# interfaces.
+ENV HOSTNAME=0.0.0.0
 
 # Standalone bundle already contains server.js, .next/static and public/.
 COPY --from=builder /app/.next/standalone ./
