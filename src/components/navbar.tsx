@@ -29,7 +29,7 @@ export function Navbar() {
   const navItems = [
     { label: 'Features', view: 'landing' as const, icon: FileText },
     { label: 'Dashboard', view: 'dashboard' as const, icon: LayoutDashboard },
-    { label: 'Pricing', view: 'pricing' as const, icon: CreditCard },
+    // { label: 'Pricing', view: 'pricing' as const, icon: CreditCard },
   ]
 
   const toggleTheme = () => {
@@ -89,24 +89,7 @@ export function Navbar() {
                 }
               </Button>
             )}
-            {isLoggedIn ? (
-              <div className="flex items-center gap-2">
-                <span className="text-sm text-muted-foreground">{userName}</span>
-                <Button variant="outline" size="sm" onClick={logout} className="gap-2">
-                  <LogOut className="w-4 h-4" />
-                  Sign Out
-                </Button>
-              </div>
-            ) : (
-              <Button
-                size="sm"
-                onClick={() => { login('Demo User', 'demo@docflow.io'); setView('dashboard') }}
-                className="gap-2 bg-emerald-600 hover:bg-emerald-700 text-white"
-              >
-                <LogIn className="w-4 h-4" />
-                Sign In
-              </Button>
-            )}
+            {/* Sign-in hidden temporarily */}
           </div>
 
           {/* Mobile toggle */}
@@ -160,33 +143,7 @@ export function Navbar() {
                   {item.label}
                 </Button>
               ))}
-              <div className="pt-2 border-t border-border/50">
-                {isLoggedIn ? (
-                  <Button
-                    variant="outline"
-                    className="w-full justify-start gap-2"
-                    onClick={() => {
-                      logout()
-                      setMobileOpen(false)
-                    }}
-                  >
-                    <LogOut className="w-4 h-4" />
-                    Sign Out ({userName})
-                  </Button>
-                ) : (
-                  <Button
-                    className="w-full gap-2 bg-emerald-600 hover:bg-emerald-700 text-white"
-                    onClick={() => {
-                      login('Demo User', 'demo@docflow.io')
-                      setView('dashboard')
-                      setMobileOpen(false)
-                    }}
-                  >
-                    <LogIn className="w-4 h-4" />
-                    Sign In
-                  </Button>
-                )}
-              </div>
+              {/* Mobile sign-in hidden temporarily */}
             </div>
           </motion.div>
         )}

@@ -737,8 +737,8 @@ export const useAppStore = create<AppState>()(
   setPendingImageData: (data) => set({ pendingImageData: data }),
 
   // Auth
-  isLoggedIn: false,
-  userName: '',
+  isLoggedIn: true,
+  userName: 'Demo User',
   login: (name, _email) => set({ isLoggedIn: true, userName: name }),
   logout: () => set({ isLoggedIn: false, userName: '' }),
 
