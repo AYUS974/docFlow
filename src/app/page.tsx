@@ -5,7 +5,7 @@ import { Navbar } from '@/components/navbar'
 import { LandingPage } from '@/components/landing/landing-page'
 import { PdfEditor } from '@/components/editor/pdf-editor'
 import { Dashboard } from '@/components/dashboard/dashboard'
-import { PricingPage } from '@/components/pricing/pricing-page'
+// import { PricingPage } from '@/components/pricing/pricing-page' // pricing commented out for now
 import { useEffect, useState } from 'react'
 
 export default function Home() {
@@ -37,7 +37,7 @@ export default function Home() {
         {currentView === 'landing' && <LandingPage />}
         {currentView === 'editor' && <PdfEditor />}
         {currentView === 'dashboard' && <Dashboard />}
-        {currentView === 'pricing' && <PricingPage />}
+        {/* {currentView === 'pricing' && <PricingPage />} */}
       </main>
 
       {/* Minimal Footer for Dashboard/Pricing views */}

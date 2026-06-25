@@ -10,7 +10,6 @@ import {
   PenTool,
   Layers,
   Zap,
-  Shield,
   Users,
   ArrowRight,
   Check,
@@ -434,7 +433,7 @@ export function LandingPage() {
         </div>
       </section>
 
-      {/* Pricing */}
+      {/* Pricing — commented out for now
       <section id="pricing" className="py-20 sm:py-28 bg-muted/30">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <motion.div
@@ -515,6 +514,7 @@ export function LandingPage() {
           </motion.div>
         </div>
       </section>
+      */}
 
       {/* Trust Bar */}
       <section className="py-16 border-y border-border/40">
@@ -595,7 +595,7 @@ export function LandingPage() {
             <div>
               <h4 className="font-semibold mb-3 text-sm">Product</h4>
               <ul className="space-y-2">
-                {['Features', 'Pricing', 'Changelog', 'Roadmap'].map((item) => (
+                {['Features', 'Changelog', 'Roadmap'].map((item) => (
                   <li key={item}>
                     <button
                       className="text-sm text-muted-foreground hover:text-foreground transition-colors"
@@ -654,10 +654,6 @@ export function LandingPage() {
               <p className="text-sm text-muted-foreground">
                 &copy; 2026 DocFlow. All rights reserved.
               </p>
-              <div className="flex items-center gap-2 text-xs text-muted-foreground/70">
-                <Shield className="w-3.5 h-3.5" />
-                <span>SOC 2 Certified &middot; GDPR Compliant</span>
-              </div>
             </div>
           </div>
         </div>
