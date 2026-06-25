@@ -202,7 +202,7 @@ export function PdfEditor() {
     }
     setSelectedAnnotId(null)
     setEditingAnnotId(null)
-    if (currentTool !== 'crop' && isCropping) {
+    if (isCropping) {
       setCropping(false)
       setCropBox(null)
     }
@@ -568,7 +568,7 @@ export function PdfEditor() {
     }
 
     // Live preview for shape/rect/ellipse/line/highlight/redact/whiteout/crop
-    const shapeTools = ['rectangle', 'ellipse', 'highlight', 'redact', 'whiteout', 'line', 'crop']
+    const shapeTools = ['rectangle', 'ellipse', 'highlight', 'redact', 'whiteout', 'line']
     if (shapeTools.includes(currentTool) || isCropping) {
       const overlay = overlayCanvasRef.current
       const canvas = canvasRef.current
