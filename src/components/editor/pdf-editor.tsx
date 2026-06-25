@@ -134,6 +134,13 @@ export function PdfEditor() {
   const [annotFontDropdownId, setAnnotFontDropdownId] = useState<string | null>(null)
   const [annotSizeDropdownId, setAnnotSizeDropdownId] = useState<string | null>(null)
   const [annotColorDropdownId, setAnnotColorDropdownId] = useState<string | null>(null)
+  const [isMobile, setIsMobile] = useState(false)
+  useEffect(() => {
+    const checkMobile = () => setIsMobile(window.innerWidth < 768)
+    checkMobile()
+    window.addEventListener('resize', checkMobile)
+    return () => window.removeEventListener('resize', checkMobile)
+  }, [])
 
   const showStatus = (msg: string) => { setStatusMessage(msg); setTimeout(() => setStatusMessage(''), 3000) }
 
@@ -165,6 +172,9 @@ export function PdfEditor() {
         }
         setPageThumbnails(thumbs)
         setPdfReady(!pdfReady)
+        if (window.innerWidth < 768 && showSidebar) {
+          toggleSidebar()
+        }
         showStatus(`Loaded ${pdf.numPages} pages`)
       } catch (err) {
         console.error('Failed to load PDF:', err)
@@ -175,6 +185,15 @@ export function PdfEditor() {
     }
     loadPdf()
   }, [currentDocument?.fileData, setEditorLoading, setTotalPages, setCurrentPage, setPageOrder])
+
+  // Auto fit to width on mobile when PDF is ready
+  useEffect(() => {
+    if (pdfReady && window.innerWidth < 768) {
+      setTimeout(() => {
+        handleFitToWidth()
+      }, 400)
+    }
+  }, [pdfReady])
 
   // Cleanup active states and selections on tool change
   useEffect(() => {
@@ -1314,9 +1333,12 @@ export function PdfEditor() {
   const isImageMode = currentTool === 'image'
 
   return (
-    <div className="h-screen flex flex-col bg-muted/30">
-      {/* ===== TOP TOOLBAR ===== */}
-      <div className="flex items-center gap-1 px-2 py-1.5 border-b border-border/60 bg-background shrink-0">
+    <div className="h-screen flex flex-col bg-muted/30 relative">
+      {/* Hidden file input for image uploads (accessible by all layout modes) */}
+      <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handleImageUpload} />
+
+      {/* ===== TOP TOOLBAR (Desktop) ===== */}
+      <div className="hidden md:flex items-center gap-1 px-2 py-1.5 border-b border-border/60 bg-background shrink-0">
         {/* Back */}
         <Button variant="ghost" size="icon" className="shrink-0 h-8 w-8" onClick={() => setView('dashboard')}>
           <ArrowLeft className="w-4 h-4" />
@@ -1558,8 +1580,7 @@ export function PdfEditor() {
             </DropdownMenuItem>
             <DropdownMenuItem onClick={handleProtect} disabled={!!processing} className="gap-2 cursor-pointer">
               <Shield className="w-4 h-4" /><div><div className="text-sm font-medium">Password Protect</div><div className="text-xs text-muted-foreground">Encrypt with password</div></div>
-            </DropdownMenuItem>
-            <DropdownMenuSeparator />
+            </DropdownMenuSeparator>
             <DropdownMenuItem onClick={handlePrint} className="gap-2 cursor-pointer">
               <Printer className="w-4 h-4" /><div className="text-sm font-medium">Print Page</div>
             </DropdownMenuItem>
@@ -1582,28 +1603,133 @@ export function PdfEditor() {
             <Button variant="ghost" size="icon" className="shrink-0 h-8 w-8" onClick={() => setShowShortcuts(true)}><Keyboard className="w-4 h-4" /></Button>
           </TooltipTrigger><TooltipContent side="bottom" className="text-xs">Shortcuts (?)</TooltipContent></Tooltip>
         </TooltipProvider>
+      </div>
 
-        {/* Hidden file input for image uploads */}
-        <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handleImageUpload} />
+      {/* ===== TOP TOOLBAR (Mobile) ===== */}
+      <div className="flex md:hidden items-center justify-between px-3 py-2 border-b border-border/60 bg-background shrink-0 select-none">
+        <div className="flex items-center gap-1 shrink-0">
+          <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setView('dashboard')}>
+            <ArrowLeft className="w-4.5 h-4.5" />
+          </Button>
+          <Button variant="ghost" size="icon" className="h-8 w-8" onClick={toggleSidebar}>
+            {showSidebar ? <PanelLeftClose className="w-4.5 h-4.5" /> : <PanelLeftOpen className="w-4.5 h-4.5" />}
+          </Button>
+        </div>
+
+        <div className="flex flex-col items-center justify-center min-w-0 flex-1 px-2">
+          <span className="text-xs font-semibold truncate max-w-[130px]">{currentDocument?.fileName}</span>
+          <span className="text-[10px] text-muted-foreground font-medium">Page {currentPage} of {totalPages}</span>
+        </div>
+
+        <div className="flex items-center gap-0.5 shrink-0">
+          <Button variant="ghost" size="icon" className="h-8 w-8" disabled={!canUndo} onClick={undo}>
+            <Undo2 className="w-4 h-4" />
+          </Button>
+          <Button variant="ghost" size="icon" className="h-8 w-8" disabled={!canRedo} onClick={redo}>
+            <Redo2 className="w-4 h-4" />
+          </Button>
+
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" size="icon" className="h-8 w-8 relative">
+                <Settings2 className="w-4.5 h-4.5" />
+                {totalAnnotations > 0 && (
+                  <span className="absolute -top-0.5 -right-0.5 min-w-[14px] h-3.5 bg-emerald-600 text-white text-[9px] font-bold rounded-full flex items-center justify-center px-0.5">
+                    {totalAnnotations}
+                  </span>
+                )}
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-56 max-h-[80vh] overflow-y-auto">
+              <div className="px-2 py-1.5 flex items-center justify-between text-xs text-muted-foreground border-b border-border/40 mb-1">
+                <span>Zoom: {Math.round(zoom * 100)}%</span>
+                <div className="flex items-center gap-0.5">
+                  <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => setZoom(zoom - 0.1)}><ZoomOut className="w-3 h-3" /></Button>
+                  <Button variant="ghost" size="icon" className="h-6 w-6" onClick={handleFitToWidth}><Maximize2 className="w-3 h-3" /></Button>
+                  <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => setZoom(zoom + 0.1)}><ZoomIn className="w-3 h-3" /></Button>
+                </div>
+              </div>
+              <DropdownMenuItem onClick={() => setShowWatermarkDialog(true)} className="gap-2 cursor-pointer text-xs">
+                <Droplets className="w-3.5 h-3.5 text-muted-foreground" /><span>Add Watermark</span>
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => setShowPageNumDialog(true)} className="gap-2 cursor-pointer text-xs">
+                <Hash className="w-3.5 h-3.5 text-muted-foreground" /><span>Add Page Numbers</span>
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={handleOcr} disabled={processing === 'ocr'} className="gap-2 cursor-pointer text-xs">
+                {processing === 'ocr' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <ScanText className="w-3.5 h-3.5 text-muted-foreground" />}
+                <span>{processing === 'ocr' ? 'Running OCR…' : 'OCR — Make Searchable'}</span>
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => { setCropping(!isCropping); if (isCropping) setCropBox(null) }} className="gap-2 cursor-pointer text-xs">
+                <Crop className="w-3.5 h-3.5 text-muted-foreground" /><span>{isCropping ? 'Cancel Crop' : 'Crop Page'}</span>
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onClick={() => { insertBlankPage(currentPage); showStatus('Blank page inserted') }} className="gap-2 cursor-pointer text-xs">
+                <FileText className="w-3.5 h-3.5 text-muted-foreground" /><span>Insert Blank Page</span>
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => { duplicatePage(currentPage); showStatus('Page duplicated') }} className="gap-2 cursor-pointer text-xs">
+                <Copy className="w-3.5 h-3.5 text-muted-foreground" /><span>Duplicate This Page</span>
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <div className="px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Export Options</div>
+              <DropdownMenuItem onClick={handleExportPdf} className="gap-2 cursor-pointer text-xs">
+                <FileDown className="w-3.5 h-3.5 text-muted-foreground" /><span>Export as PDF</span>
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={handleDownloadPng} className="gap-2 cursor-pointer text-xs">
+                <ImageIcon className="w-3.5 h-3.5 text-muted-foreground" /><span>Export as PNG</span>
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={handleConvertToJpg} className="gap-2 cursor-pointer text-xs">
+                <ImageIcon className="w-3.5 h-3.5 text-muted-foreground" /><span>Convert to JPG</span>
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => handleConvert('txt')} className="gap-2 cursor-pointer text-xs">
+                <FileText className="w-3.5 h-3.5 text-muted-foreground" /><span>Convert to TXT</span>
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => handleConvert('html')} className="gap-2 cursor-pointer text-xs">
+                <FileOutput className="w-3.5 h-3.5 text-muted-foreground" /><span>Convert to HTML</span>
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onClick={handleCompress} disabled={!!processing} className="gap-2 cursor-pointer text-xs">
+                <Minus className="w-3.5 h-3.5 text-muted-foreground" /><span>Compress PDF</span>
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={handleProtect} disabled={!!processing} className="gap-2 cursor-pointer text-xs">
+                <Shield className="w-3.5 h-3.5 text-muted-foreground" /><span>Password Protect</span>
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onClick={handlePrint} className="gap-2 cursor-pointer text-xs">
+                <Printer className="w-3.5 h-3.5 text-muted-foreground" /><span>Print Page</span>
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
       </div>
       {/* ===== PAGE NAV BAR ===== */}
-      <div className="flex items-center justify-center gap-3 px-4 py-1.5 border-b border-border/40 bg-background shrink-0">
+      <div className="flex items-center justify-center gap-3 px-4 py-1.5 border-b border-border/40 bg-background shrink-0 select-none">
         <Button variant="outline" size="icon" className="h-7 w-7" disabled={currentPage <= 1} onClick={() => setCurrentPage(currentPage - 1)}><ChevronLeft className="w-4 h-4" /></Button>
         <span className="text-sm text-muted-foreground">Page <span className="font-medium text-foreground">{currentPage}</span> of {totalPages}</span>
         <Button variant="outline" size="icon" className="h-7 w-7" disabled={currentPage >= totalPages} onClick={() => setCurrentPage(currentPage + 1)}><ChevronRight className="w-4 h-4" /></Button>
-        <span className="text-xs text-muted-foreground ml-3 truncate max-w-[200px]">{currentDocument?.fileName}</span>
-        {totalAnnotations > 0 && <span className="text-xs bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300 px-2 py-0.5 rounded-full ml-1">{totalAnnotations} annot.</span>}
-        {textEdits.size > 0 && <span className="text-xs bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 px-2 py-0.5 rounded-full ml-1">{textEdits.size} text edit{textEdits.size !== 1 ? 's' : ''}</span>}
+        <span className="text-xs text-muted-foreground ml-3 truncate max-w-[200px] hidden sm:inline">{currentDocument?.fileName}</span>
+        {totalAnnotations > 0 && <span className="text-xs bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300 px-2 py-0.5 rounded-full ml-1 hidden sm:inline">{totalAnnotations} annot.</span>}
+        {textEdits.size > 0 && <span className="text-xs bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 px-2 py-0.5 rounded-full ml-1 hidden sm:inline">{textEdits.size} text edit{textEdits.size !== 1 ? 's' : ''}</span>}
       </div>
 
       {/* ===== MAIN CONTENT ===== */}
-      <div className="flex-1 flex overflow-hidden">
+      <div className="flex-1 flex overflow-hidden relative">
+        {/* Mobile Sidebar Backdrop */}
+        {showSidebar && (
+          <div
+            className="fixed inset-0 z-40 bg-black/40 md:hidden transition-opacity"
+            onClick={toggleSidebar}
+          />
+        )}
+
         {/* Left Sidebar */}
         <AnimatePresence>
           {showSidebar && (
             <motion.div
-              initial={{ width: 0, opacity: 0 }} animate={{ width: 200, opacity: 1 }} exit={{ width: 0, opacity: 0 }}
-              transition={{ duration: 0.2 }} className="border-r border-border/60 bg-background shrink-0 overflow-hidden flex flex-col"
+              initial={{ width: 0, opacity: 0 }}
+              animate={{ width: isMobile ? 240 : 200, opacity: 1 }}
+              exit={{ width: 0, opacity: 0 }}
+              transition={{ duration: 0.2 }}
+              className="border-r border-border/60 bg-background shrink-0 overflow-hidden flex flex-col md:relative fixed inset-y-0 left-0 z-50 md:z-0 shadow-2xl md:shadow-none"
             >
               <div className="flex border-b border-border/40 shrink-0">
                 <button className={`flex-1 py-2 text-xs font-medium transition-colors ${sidebarMode === 'thumbnails' ? 'text-emerald-600 border-b-2 border-emerald-600' : 'text-muted-foreground hover:text-foreground'}`} onClick={() => setSidebarMode('thumbnails')}>Thumbnails</button>
@@ -1636,7 +1762,7 @@ export function PdfEditor() {
 
         {/* Canvas Area */}
         <div
-          ref={containerRef} className="flex-1 overflow-auto flex items-start justify-center p-6"
+          ref={containerRef} className="flex-1 overflow-auto flex items-start justify-center p-2 sm:p-6"
           onWheel={handleWheel}
           style={{ cursor: isPanMode ? 'grab' : isCropping ? 'crosshair' : undefined }}
         >
@@ -2071,8 +2197,136 @@ export function PdfEditor() {
         </AnimatePresence>
       </div>
 
+      {/* ===== MOBILE FORMATTING SUB-TOOLBAR ===== */}
+      {isMobile && (['draw', 'rectangle', 'ellipse', 'line', 'text', 'editText'].includes(currentTool) || (currentTool === 'select' && selectedAnnot?.type === 'text')) && (
+        <div className="flex flex-col gap-2 p-2 border-t border-border/40 bg-background shrink-0 z-30 select-none">
+          {/* Colors (horizontal scroll) */}
+          <div className="flex items-center gap-2 overflow-x-auto py-1 px-1" style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}>
+            <span className="text-[10px] text-muted-foreground uppercase font-bold shrink-0">Color:</span>
+            {COLORS.map((c) => (
+              <button
+                key={c}
+                className={`w-6 h-6 rounded-full border-2 shrink-0 transition-all ${(selectedAnnot ? selectedAnnot.color : drawColor) === c ? 'border-foreground scale-110 shadow-sm' : 'border-transparent hover:scale-105'}`}
+                style={{ backgroundColor: c }}
+                onClick={() => {
+                  setDrawColor(c)
+                  if (selectedAnnotId) {
+                    updateAnnotation(selectedAnnotId, { color: c })
+                  }
+                }}
+              />
+            ))}
+          </div>
+          
+          {/* Stroke Width / Font controls */}
+          <div className="flex items-center gap-3 px-1">
+            {['draw', 'rectangle', 'ellipse', 'line'].includes(currentTool) && (
+              <div className="flex items-center gap-1 shrink-0">
+                <span className="text-[10px] text-muted-foreground uppercase font-bold mr-1">Stroke:</span>
+                <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setStrokeWidth(Math.max(1, strokeWidth - 1))}><Minus className="w-3.5 h-3.5" /></Button>
+                <span className="text-xs font-semibold w-7 text-center font-mono">{strokeWidth}px</span>
+                <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setStrokeWidth(Math.min(10, strokeWidth + 1))}><Plus className="w-3.5 h-3.5" /></Button>
+              </div>
+            )}
+            
+            {(currentTool === 'text' || currentTool === 'editText' || (currentTool === 'select' && selectedAnnot?.type === 'text')) && (
+              <div className="flex items-center gap-2 w-full justify-between">
+                {/* Font Family selector */}
+                <select
+                  value={selectedAnnot?.type === 'text' ? (selectedAnnot.fontFamily || 'Helvetica') : fontFamily}
+                  onChange={(e) => {
+                    setFontFamily(e.target.value)
+                    if (selectedAnnotId) {
+                      updateAnnotation(selectedAnnotId, { fontFamily: e.target.value })
+                    }
+                  }}
+                  className="text-xs border border-border rounded px-1.5 py-1 bg-background shrink-0 max-w-[100px]"
+                >
+                  {FONT_OPTIONS.map(f => <option key={f.value} value={f.value}>{f.label}</option>)}
+                </select>
+                
+                {/* Font Size controls */}
+                <div className="flex items-center gap-0.5 shrink-0">
+                  <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => {
+                    const currentSize = selectedAnnot?.type === 'text' ? (selectedAnnot.fontSize || 16) : fontSize
+                    const nextSize = Math.max(6, currentSize - 2)
+                    setFontSize(nextSize)
+                    if (selectedAnnotId) {
+                      updateAnnotation(selectedAnnotId, { fontSize: nextSize })
+                    }
+                  }}><Minus className="w-3 h-3" /></Button>
+                  <span className="text-xs font-semibold w-8 text-center font-mono">
+                    {selectedAnnot?.type === 'text' ? (selectedAnnot.fontSize || 16) : fontSize}px
+                  </span>
+                  <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => {
+                    const currentSize = selectedAnnot?.type === 'text' ? (selectedAnnot.fontSize || 16) : fontSize
+                    const nextSize = Math.min(72, currentSize + 2)
+                    setFontSize(nextSize)
+                    if (selectedAnnotId) {
+                      updateAnnotation(selectedAnnotId, { fontSize: nextSize })
+                    }
+                  }}><Plus className="w-3 h-3" /></Button>
+                </div>
+                
+                {/* Bold / Italic controls */}
+                <div className="flex items-center gap-1 shrink-0">
+                  <Button
+                    variant={(selectedAnnot?.type === 'text' ? !!selectedAnnot.bold : textBold) ? 'secondary' : 'ghost'}
+                    size="icon" className="h-7 w-7 font-bold text-xs"
+                    onClick={() => {
+                      if (selectedAnnotId) {
+                        const annot = annotations.find(a => a.id === selectedAnnotId)
+                        if (annot) updateAnnotation(selectedAnnotId, { bold: !annot.bold })
+                      } else {
+                        setTextBold(!textBold)
+                      }
+                    }}
+                  >
+                    B
+                  </Button>
+                  <Button
+                    variant={(selectedAnnot?.type === 'text' ? !!selectedAnnot.italic : textItalic) ? 'secondary' : 'ghost'}
+                    size="icon" className="h-7 w-7 italic font-serif text-xs"
+                    onClick={() => {
+                      if (selectedAnnotId) {
+                        const annot = annotations.find(a => a.id === selectedAnnotId)
+                        if (annot) updateAnnotation(selectedAnnotId, { italic: !annot.italic })
+                      } else {
+                        setTextItalic(!textItalic)
+                      }
+                    }}
+                  >
+                    I
+                  </Button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ===== BOTTOM TOOLBAR (Mobile) ===== */}
+      <div className="flex md:hidden items-center gap-1.5 px-3 py-2 border-t border-border/60 bg-background shrink-0 z-30 overflow-x-auto justify-start select-none" style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}>
+        {ALL_TOOLS.map((tool) => (
+          <Button
+            key={tool.id}
+            variant={currentTool === tool.id ? 'secondary' : 'ghost'}
+            size="sm"
+            className="shrink-0 h-9 px-3 gap-1.5 rounded-lg text-xs"
+            onClick={() => {
+              if (tool.id === 'signature' && !signatureData) { setShowSignaturePad(true); return }
+              if (tool.id === 'image' && !pendingImageData) { fileInputRef.current?.click(); return }
+              setCurrentTool(tool.id)
+            }}
+          >
+            <tool.icon className="w-4 h-4" />
+            <span>{tool.label}</span>
+          </Button>
+        ))}
+      </div>
+
       {/* ===== STATUS BAR ===== */}
-      <div className="flex items-center justify-between px-4 py-1 border-t border-border/40 bg-background shrink-0 text-xs text-muted-foreground">
+      <div className="hidden md:flex items-center justify-between px-4 py-1 border-t border-border/40 bg-background shrink-0 text-xs text-muted-foreground">
         <div className="flex items-center gap-3">
           <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-500" /> {currentDocument?.fileName}</span>
           <span>{totalPages} pages</span>
