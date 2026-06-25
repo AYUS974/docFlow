@@ -639,6 +639,10 @@ export function PdfEditor() {
 
   const handleCanvasClick = (e: React.MouseEvent) => {
     if (currentTool === 'text') {
+      // If a text box is already open for editing, this click is the user
+      // committing it (the blur handler does the commit) — don't also spawn a
+      // brand-new box, or every "click away" would duplicate the text.
+      if (editingAnnotId) return
       const coords = getCanvasCoords(e)
       const newAnnotId = crypto.randomUUID()
       addAnnotation({
@@ -656,6 +660,9 @@ export function PdfEditor() {
       })
       setSelectedAnnotId(newAnnotId)
       setEditingAnnotId(newAnnotId)
+      // Drop back to the Select tool so subsequent clicks edit/move this box
+      // instead of dropping more text boxes onto the page.
+      setCurrentTool('select')
     }
     if (currentTool === 'eraser') handleEraserClick(e)
   }
@@ -1631,8 +1638,12 @@ export function PdfEditor() {
                             if (document.activeElement !== el) {
                               el.textContent = annot.content === 'Type text...' ? '' : (annot.content || '')
                               el.focus()
+                              // Place the caret at the end so the user keeps
+                              // typing where they left off instead of having the
+                              // whole word selected (and replaced on next keypress).
                               const range = document.createRange()
                               range.selectNodeContents(el)
+                              range.collapse(false)
                               const sel = window.getSelection()
                               sel?.removeAllRanges()
                               sel?.addRange(range)
@@ -1666,6 +1677,13 @@ export function PdfEditor() {
                           } else {
                             setSelectedAnnotId(annot.id)
                           }
+                        }
+                      }}
+                      onDoubleClick={(e) => {
+                        e.stopPropagation()
+                        if (isSelectOrTextTool) {
+                          setSelectedAnnotId(annot.id)
+                          setEditingAnnotId(annot.id)
                         }
                       }}
                       className="group"
