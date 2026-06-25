@@ -274,6 +274,7 @@ interface AppState {
   processPdfFile: (file: File) => void
 
   // Undo/Redo history
+  saveToUndoStack: () => void
   _undoStack: PDFAnnotation[][]
   _redoStack: PDFAnnotation[][]
 }
@@ -508,8 +509,13 @@ export const useAppStore = create<AppState>()(
       _undoStack: [...state._undoStack, state.annotations],
       canUndo: true,
       canRedo: state._redoStack.length > 1,
-    }
   }),
+  saveToUndoStack: () => set((state) => ({
+    _undoStack: [...state._undoStack, state.annotations],
+    _redoStack: [],
+    canUndo: true,
+    canRedo: false,
+  })),
   drawColor: '#f59e0b',
   setDrawColor: (color) => set({ drawColor: color }),
   strokeWidth: 2,

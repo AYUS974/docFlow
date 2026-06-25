@@ -94,6 +94,7 @@ export function PdfEditor() {
     savedSignatures, addSavedSignature,
     insertBlankPage, duplicatePage,
     updateDocument, updateAnnotation,
+    saveToUndoStack,
   } = useAppStore()
 
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -127,6 +128,9 @@ export function PdfEditor() {
   const [isDraggingAnnot, setIsDraggingAnnot] = useState(false)
   const [dragAnnotStart, setDragAnnotStart] = useState<{ x: number; y: number; annotX: number; annotY: number; points?: { x: number; y: number }[] } | null>(null)
   const [editingAnnotId, setEditingAnnotId] = useState<string | null>(null)
+  const [textBold, setTextBold] = useState(false)
+  const [textItalic, setTextItalic] = useState(false)
+  const textSubmitRef = useRef<() => void>(() => {})
   const [annotFontDropdownId, setAnnotFontDropdownId] = useState<string | null>(null)
   const [annotSizeDropdownId, setAnnotSizeDropdownId] = useState<string | null>(null)
   const [annotColorDropdownId, setAnnotColorDropdownId] = useState<string | null>(null)
@@ -172,11 +176,53 @@ export function PdfEditor() {
     loadPdf()
   }, [currentDocument?.fileData, setEditorLoading, setTotalPages, setCurrentPage, setPageOrder])
 
+  // Cleanup active states and selections on tool change
+  useEffect(() => {
+    if (textInput.visible) {
+      textSubmitRef.current()
+    }
+    setSelectedAnnotId(null)
+    setEditingAnnotId(null)
+    if (currentTool !== 'crop' && isCropping) {
+      setCropping(false)
+      setCropBox(null)
+    }
+  }, [currentTool])
+
+  // Assign ref to handleTextSubmit to bypass hook lifecycle limits
+  textSubmitRef.current = () => {
+    if (!textInputValue.trim()) {
+      if (editingAnnotId) {
+        saveToUndoStack()
+        removeAnnotation(editingAnnotId)
+        showStatus('Text removed')
+      }
+      setTextInput({ x: 0, y: 0, visible: false }); setTextInputValue(''); setEditingAnnotId(null); return
+    }
+
+    if (editingAnnotId) {
+      saveToUndoStack()
+      updateAnnotation(editingAnnotId, { content: textInputValue })
+      showStatus('Text updated')
+    } else {
+      saveToUndoStack()
+      addAnnotation({
+        id: crypto.randomUUID(), type: 'text', pageNumber: currentPage,
+        x: textInput.x, y: textInput.y, color: drawColor,
+        content: textInputValue, fontSize, fontFamily,
+        bold: textBold, italic: textItalic
+      })
+      showStatus('Text added')
+    }
+    setTextInput({ x: 0, y: 0, visible: false }); setTextInputValue(''); setEditingAnnotId(null)
+  }
+
   // Keyboard shortcut to delete selected annotation
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (selectedAnnotId && (e.key === 'Delete' || e.key === 'Backspace')) {
         if (document.activeElement?.tagName !== 'INPUT' && document.activeElement?.tagName !== 'TEXTAREA') {
+          saveToUndoStack()
           removeAnnotation(selectedAnnotId)
           setSelectedAnnotId(null)
           showStatus('Annotation deleted')
@@ -418,6 +464,7 @@ export function PdfEditor() {
         if (coords.x >= x && coords.x <= x + w && coords.y >= y && coords.y <= y + h) hit = true
 
         if (hit) {
+          saveToUndoStack()
           setSelectedAnnotId(annot.id)
           setIsDraggingAnnot(true)
           setDragAnnotStart({
@@ -608,34 +655,20 @@ export function PdfEditor() {
         }
       } else {
         const ax = annot.x, ay = annot.y, aw = annot.width || 50, ah = annot.height || 30
+        if (coords.x >= ax && coords.x <= ax + aw && coords.y >= ay && coords.y <= ay + ah) {
+          saveToUndoStack()
+          setTextInput({ x: annot.x, y: annot.y, visible: true })
+          setTextInputValue(annot.content || '')
+          setEditingAnnotId(annot.id)
+          return
+        }
         if (coords.x >= ax && coords.x <= ax + aw && coords.y >= ay && coords.y <= ay + ah) hit = true
       }
       if (hit) { removeAnnotation(annot.id); showStatus(`Removed ${annot.type}`); return }
     }
   }
 
-  const handleTextSubmit = () => {
-    if (!textInputValue.trim()) {
-      if (editingAnnotId) {
-        removeAnnotation(editingAnnotId)
-        showStatus('Text removed')
-      }
-      setTextInput({ x: 0, y: 0, visible: false }); setTextInputValue(''); setEditingAnnotId(null); return
-    }
-
-    if (editingAnnotId) {
-      updateAnnotation(editingAnnotId, { content: textInputValue })
-      showStatus('Text updated')
-    } else {
-      addAnnotation({
-        id: crypto.randomUUID(), type: 'text', pageNumber: currentPage,
-        x: textInput.x, y: textInput.y, color: drawColor,
-        content: textInputValue, fontSize, fontFamily,
-      })
-      showStatus('Text added')
-    }
-    setTextInput({ x: 0, y: 0, visible: false }); setTextInputValue(''); setEditingAnnotId(null)
-  }
+  // handleTextSubmit replaced by textSubmitRef
 
   const handleCanvasClick = (e: React.MouseEvent) => {
     if (currentTool === 'text') {
@@ -1270,6 +1303,7 @@ export function PdfEditor() {
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [setCurrentTool, goBack, setZoom, zoom, undo, redo, textInput.visible, editingTextItem, setEditingTextItem, isCropping, setCropping, currentTool])
 
+  const selectedAnnot = selectedAnnotId ? annotations.find(a => a.id === selectedAnnotId) : null
   const pageAnnotations = annotations.filter((a) => a.pageNumber === currentPage)
   const totalAnnotations = annotations.length
   const isEditTextMode = currentTool === 'editText'
@@ -1337,7 +1371,12 @@ export function PdfEditor() {
         {/* Colors */}
         <div className="flex items-center gap-1 shrink-0">
           {COLORS.map((c) => (
-            <button key={c} className={`w-4 h-4 rounded-full border-2 transition-all ${drawColor === c ? 'border-foreground scale-125' : 'border-transparent hover:scale-110'}`} style={{ backgroundColor: c }} onClick={() => setDrawColor(c)} />
+            <button key={c} className={`w-4 h-4 rounded-full border-2 transition-all ${(selectedAnnot ? selectedAnnot.color : drawColor) === c ? 'border-foreground scale-125' : 'border-transparent hover:scale-110'}`} style={{ backgroundColor: c }} onClick={() => {
+              setDrawColor(c)
+              if (selectedAnnotId) {
+                updateAnnotation(selectedAnnotId, { color: c })
+              }
+            }} />
           ))}
         </div>
         <Separator orientation="vertical" className="h-6" />
@@ -1350,15 +1389,73 @@ export function PdfEditor() {
             <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setStrokeWidth(Math.min(10, strokeWidth + 1))}><Plus className="w-3 h-3" /></Button>
           </div>
         )}
-        {(currentTool === 'text' || currentTool === 'editText') && (
+        {(currentTool === 'text' || currentTool === 'editText' || (currentTool === 'select' && selectedAnnot?.type === 'text')) && (
           <div className="flex items-center gap-1.5 shrink-0">
-            <select value={fontFamily} onChange={(e) => setFontFamily(e.target.value)}
-              className="text-xs border border-border rounded px-1.5 py-1 bg-background">
+            <select
+              value={selectedAnnot?.type === 'text' ? (selectedAnnot.fontFamily || 'Helvetica') : fontFamily}
+              onChange={(e) => {
+                setFontFamily(e.target.value)
+                if (selectedAnnotId) {
+                  updateAnnotation(selectedAnnotId, { fontFamily: e.target.value })
+                }
+              }}
+              className="text-xs border border-border rounded px-1.5 py-1 bg-background"
+            >
               {FONT_OPTIONS.map(f => <option key={f.value} value={f.value}>{f.label}</option>)}
             </select>
-            <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setFontSize(Math.max(6, fontSize - 2))}><Minus className="w-3 h-3" /></Button>
-            <span className="text-xs text-muted-foreground w-7 text-center">{fontSize}px</span>
-            <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setFontSize(Math.min(72, fontSize + 2))}><Plus className="w-3 h-3" /></Button>
+            <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => {
+              const currentSize = selectedAnnot?.type === 'text' ? (selectedAnnot.fontSize || 16) : fontSize
+              const nextSize = Math.max(6, currentSize - 2)
+              setFontSize(nextSize)
+              if (selectedAnnotId) {
+                updateAnnotation(selectedAnnotId, { fontSize: nextSize })
+              }
+            }}><Minus className="w-3 h-3" /></Button>
+            <span className="text-xs text-muted-foreground w-7 text-center">
+              {selectedAnnot?.type === 'text' ? (selectedAnnot.fontSize || 16) : fontSize}px
+            </span>
+            <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => {
+              const currentSize = selectedAnnot?.type === 'text' ? (selectedAnnot.fontSize || 16) : fontSize
+              const nextSize = Math.min(72, currentSize + 2)
+              setFontSize(nextSize)
+              if (selectedAnnotId) {
+                updateAnnotation(selectedAnnotId, { fontSize: nextSize })
+              }
+            }}><Plus className="w-3 h-3" /></Button>
+
+            {/* Bold and Italic toggles */}
+            {(currentTool === 'text' || (currentTool === 'select' && selectedAnnot?.type === 'text')) && (
+              <>
+                <Button
+                  variant={(selectedAnnot?.type === 'text' ? !!selectedAnnot.bold : textBold) ? 'secondary' : 'ghost'}
+                  size="icon" className="h-7 w-7 font-bold"
+                  onClick={() => {
+                    if (selectedAnnotId) {
+                      const annot = annotations.find(a => a.id === selectedAnnotId)
+                      if (annot) updateAnnotation(selectedAnnotId, { bold: !annot.bold })
+                    } else {
+                      setTextBold(!textBold)
+                    }
+                  }}
+                >
+                  B
+                </Button>
+                <Button
+                  variant={(selectedAnnot?.type === 'text' ? !!selectedAnnot.italic : textItalic) ? 'secondary' : 'ghost'}
+                  size="icon" className="h-7 w-7 italic font-serif"
+                  onClick={() => {
+                    if (selectedAnnotId) {
+                      const annot = annotations.find(a => a.id === selectedAnnotId)
+                      if (annot) updateAnnotation(selectedAnnotId, { italic: !annot.italic })
+                    } else {
+                      setTextItalic(!textItalic)
+                    }
+                  }}
+                >
+                  I
+                </Button>
+              </>
+            )}
           </div>
         )}
 
@@ -1544,6 +1641,26 @@ export function PdfEditor() {
           style={{ cursor: isPanMode ? 'grab' : isCropping ? 'crosshair' : undefined }}
         >
           <div className="pdf-canvas-container shadow-xl rounded-lg overflow-hidden relative">
+            {/* Text input overlay for add-text tool */}
+            {textInput.visible && (
+              <div className="absolute" style={{
+                left: textInput.x * zoom * 1.5,
+                top: textInput.y * zoom * 1.5 - (selectedAnnot?.type === 'text' ? (selectedAnnot.fontSize || 16) : fontSize) * zoom * 1.5
+              }}>
+                <input type="text" autoFocus value={textInputValue} onChange={(e) => setTextInputValue(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') textSubmitRef.current(); if (e.key === 'Escape') setTextInput({ x: 0, y: 0, visible: false }) }}
+                  onBlur={() => textSubmitRef.current()}
+                  className="border-2 border-emerald-500 rounded px-2 py-1 bg-white/90 dark:bg-gray-900/90 backdrop-blur-sm outline-none"
+                  style={{
+                    fontSize: (selectedAnnot?.type === 'text' ? (selectedAnnot.fontSize || 16) : fontSize) * zoom * 1.5,
+                    color: selectedAnnot ? selectedAnnot.color : drawColor,
+                    fontFamily: (selectedAnnot?.type === 'text' ? (selectedAnnot.fontFamily || 'Helvetica') : fontFamily) === 'Courier' ? 'Courier New, monospace' : (selectedAnnot?.type === 'text' ? (selectedAnnot.fontFamily || 'Helvetica') : fontFamily) === 'TimesRoman' ? 'Times New Roman, serif' : 'Helvetica Neue, sans-serif',
+                    fontWeight: (selectedAnnot?.type === 'text' ? !!selectedAnnot.bold : textBold) ? 'bold' : 'normal',
+                    fontStyle: (selectedAnnot?.type === 'text' ? !!selectedAnnot.italic : textItalic) ? 'italic' : 'normal'
+                  }}
+                  placeholder="Type annotation..." />
+              </div>
+            )}
             {isRendering && (
               <div className="absolute inset-0 z-10 flex items-center justify-center bg-background/50 backdrop-blur-sm rounded-lg">
                 <div className="w-8 h-8 border-3 border-emerald-200 border-t-emerald-600 rounded-full animate-spin" />
