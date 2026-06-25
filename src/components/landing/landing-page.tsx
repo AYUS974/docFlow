@@ -639,6 +639,21 @@ export function LandingPage() {
             <p className="text-sm text-muted-foreground">
               &copy; 2026 DocFlow. All rights reserved.
             </p>
+            
+            <a
+              href="https://ayuslabs.com"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full border border-border/60 bg-[#0c0f16] hover:bg-[#121622] text-[#f8fafc] hover:text-[#ffffff] transition-all text-xs font-semibold shadow-sm shrink-0"
+            >
+              <span>Powered By</span>
+              <img
+                src="/ayus-logo.jpeg"
+                alt="AYUS Labs"
+                className="w-5.5 h-5.5 rounded-full object-cover"
+              />
+            </a>
+
             <div className="flex items-center gap-2 text-sm text-muted-foreground">
               <Shield className="w-4 h-4" />
               <span>SOC 2 Certified &middot; GDPR Compliant</span>
