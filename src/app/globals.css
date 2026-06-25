@@ -1,0 +1,377 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --color-emerald-50: #ecfdf5;
+  --color-emerald-100: #d1fae5;
+  --color-emerald-200: #a7f3d0;
+  --color-emerald-300: #6ee7b7;
+  --color-emerald-400: #34d399;
+  --color-emerald-500: #10b981;
+  --color-emerald-600: #059669;
+  --color-emerald-700: #047857;
+  --color-emerald-800: #065f46;
+  --color-emerald-900: #064e3b;
+  --color-amber-50: #fffbeb;
+  --color-amber-100: #fef3c7;
+  --color-amber-200: #fde68a;
+  --color-amber-300: #fcd34d;
+  --color-amber-400: #fbbf24;
+  --color-amber-500: #f59e0b;
+  --color-amber-600: #d97706;
+  --color-amber-700: #b45309;
+  --color-amber-800: #92400e;
+  --color-amber-900: #78350f;
+}
+
+:root {
+  --radius: 0.625rem;
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.145 0 0);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.145 0 0);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.145 0 0);
+  --primary: oklch(0.627 0.194 149.214);
+  --primary-foreground: oklch(0.985 0 0);
+  --secondary: oklch(0.968 0.007 155.861);
+  --secondary-foreground: oklch(0.205 0.015 153.455);
+  --muted: oklch(0.968 0.007 155.861);
+  --muted-foreground: oklch(0.5 0.02 155);
+  --accent: oklch(0.968 0.007 155.861);
+  --accent-foreground: oklch(0.205 0.015 153.455);
+  --destructive: oklch(0.577 0.245 27.325);
+  --border: oklch(0.922 0.01 155);
+  --input: oklch(0.922 0.01 155);
+  --ring: oklch(0.627 0.194 149.214);
+  --chart-1: oklch(0.627 0.194 149.214);
+  --chart-2: oklch(0.7 0.17 162.48);
+  --chart-3: oklch(0.769 0.188 70.08);
+  --chart-4: oklch(0.627 0.265 303.9);
+  --chart-5: oklch(0.645 0.246 16.439);
+  --sidebar: oklch(0.985 0.005 155);
+  --sidebar-foreground: oklch(0.145 0 0);
+  --sidebar-primary: oklch(0.627 0.194 149.214);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.968 0.007 155.861);
+  --sidebar-accent-foreground: oklch(0.205 0.015 153.455);
+  --sidebar-border: oklch(0.922 0.01 155);
+  --sidebar-ring: oklch(0.627 0.194 149.214);
+}
+
+.dark {
+  --background: oklch(0.13 0.005 155);
+  --foreground: oklch(0.985 0 0);
+  --card: oklch(0.18 0.01 155);
+  --card-foreground: oklch(0.985 0 0);
+  --popover: oklch(0.18 0.01 155);
+  --popover-foreground: oklch(0.985 0 0);
+  --primary: oklch(0.7 0.194 149.214);
+  --primary-foreground: oklch(0.145 0 0);
+  --secondary: oklch(0.25 0.015 155);
+  --secondary-foreground: oklch(0.985 0 0);
+  --muted: oklch(0.25 0.015 155);
+  --muted-foreground: oklch(0.708 0.02 155);
+  --accent: oklch(0.25 0.015 155);
+  --accent-foreground: oklch(0.985 0 0);
+  --destructive: oklch(0.704 0.191 22.216);
+  --border: oklch(1 0 0 / 10%);
+  --input: oklch(1 0 0 / 15%);
+  --ring: oklch(0.7 0.194 149.214);
+  --chart-1: oklch(0.7 0.194 149.214);
+  --chart-2: oklch(0.696 0.17 162.48);
+  --chart-3: oklch(0.769 0.188 70.08);
+  --chart-4: oklch(0.627 0.265 303.9);
+  --chart-5: oklch(0.645 0.246 16.439);
+  --sidebar: oklch(0.16 0.01 155);
+  --sidebar-foreground: oklch(0.985 0 0);
+  --sidebar-primary: oklch(0.7 0.194 149.214);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.25 0.015 155);
+  --sidebar-accent-foreground: oklch(0.985 0 0);
+  --sidebar-border: oklch(1 0 0 / 10%);
+  --sidebar-ring: oklch(0.7 0.194 149.214);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+}
+
+/* Custom scrollbar */
+.custom-scrollbar::-webkit-scrollbar {
+  width: 6px;
+}
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: oklch(0.7 0.02 155);
+  border-radius: 3px;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: oklch(0.5 0.02 155);
+}
+
+/* PDF editor canvas container */
+.pdf-canvas-container {
+  position: relative;
+  display: inline-block;
+}
+.pdf-canvas-container canvas {
+  display: block;
+}
+
+/* Annotation overlay */
+.annotation-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+.annotation-overlay.active {
+  pointer-events: auto;
+  cursor: crosshair;
+}
+
+/* Gradient text */
+.gradient-text {
+  background: linear-gradient(135deg, #059669, #10b981, #34d399);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* Hero background */
+.hero-bg {
+  background: radial-gradient(ellipse at top, oklch(0.97 0.03 155), oklch(1 0 0) 70%);
+}
+.dark .hero-bg {
+  background: radial-gradient(ellipse at top, oklch(0.2 0.04 155), oklch(0.13 0.005 155) 70%);
+}
+
+/* Glass morphism */
+.glass {
+  backdrop-filter: blur(12px);
+  background: oklch(1 0 0 / 0.7);
+  border: 1px solid oklch(0.9 0.02 155);
+}
+.dark .glass {
+  background: oklch(0.2 0.02 155 / 0.7);
+  border: 1px solid oklch(1 0 0 / 10%);
+}
+
+/* Floating animation */
+@keyframes float {
+  0%, 100% { transform: translateY(0px); }
+  50% { transform: translateY(-10px); }
+}
+.animate-float {
+  animation: float 3s ease-in-out infinite;
+}
+
+/* Shimmer loading */
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+.animate-shimmer {
+  background: linear-gradient(90deg, oklch(0.95 0 0) 25%, oklch(0.97 0.02 155) 50%, oklch(0.95 0 0) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+}
+.dark .animate-shimmer {
+  background: linear-gradient(90deg, oklch(0.2 0 0) 25%, oklch(0.25 0.02 155) 50%, oklch(0.2 0 0) 75%);
+  background-size: 200% 100%;
+}
+
+/* Grid pattern */
+.grid-pattern {
+  background-image: 
+    linear-gradient(oklch(0.92 0.01 155) 1px, transparent 1px),
+    linear-gradient(90deg, oklch(0.92 0.01 155) 1px, transparent 1px);
+  background-size: 40px 40px;
+}
+.dark .grid-pattern {
+  background-image: 
+    linear-gradient(oklch(1 0 0 / 5%) 1px, transparent 1px),
+    linear-gradient(90deg, oklch(1 0 0 / 5%) 1px, transparent 1px);
+  background-size: 40px 40px;
+}
+
+/* Metric-compatible fonts for inline editing */
+
+/* Arimo (Arial clone) */
+@font-face {
+  font-family: 'Arimo';
+  src: url('/fonts/Arimo-Regular.ttf') format('truetype');
+  font-weight: normal;
+  font-style: normal;
+}
+@font-face {
+  font-family: 'Arimo';
+  src: url('/fonts/Arimo-Bold.ttf') format('truetype');
+  font-weight: bold;
+  font-style: normal;
+}
+@font-face {
+  font-family: 'Arimo';
+  src: url('/fonts/Arimo-Italic.ttf') format('truetype');
+  font-weight: normal;
+  font-style: italic;
+}
+@font-face {
+  font-family: 'Arimo';
+  src: url('/fonts/Arimo-BoldItalic.ttf') format('truetype');
+  font-weight: bold;
+  font-style: italic;
+}
+
+/* Tinos (Times Roman clone) */
+@font-face {
+  font-family: 'Tinos';
+  src: url('/fonts/Tinos-Regular.ttf') format('truetype');
+  font-weight: normal;
+  font-style: normal;
+}
+@font-face {
+  font-family: 'Tinos';
+  src: url('/fonts/Tinos-Bold.ttf') format('truetype');
+  font-weight: bold;
+  font-style: normal;
+}
+@font-face {
+  font-family: 'Tinos';
+  src: url('/fonts/Tinos-Italic.ttf') format('truetype');
+  font-weight: normal;
+  font-style: italic;
+}
+@font-face {
+  font-family: 'Tinos';
+  src: url('/fonts/Tinos-BoldItalic.ttf') format('truetype');
+  font-weight: bold;
+  font-style: italic;
+}
+
+/* Cousine (Courier clone) */
+@font-face {
+  font-family: 'Cousine';
+  src: url('/fonts/Cousine-Regular.ttf') format('truetype');
+  font-weight: normal;
+  font-style: normal;
+}
+@font-face {
+  font-family: 'Cousine';
+  src: url('/fonts/Cousine-Bold.ttf') format('truetype');
+  font-weight: bold;
+  font-style: normal;
+}
+@font-face {
+  font-family: 'Cousine';
+  src: url('/fonts/Cousine-Italic.ttf') format('truetype');
+  font-weight: normal;
+  font-style: italic;
+}
+@font-face {
+  font-family: 'Cousine';
+  src: url('/fonts/Cousine-BoldItalic.ttf') format('truetype');
+  font-weight: bold;
+  font-style: italic;
+}
+
+/* Caladea (Cambria clone) */
+@font-face {
+  font-family: 'Caladea';
+  src: url('/fonts/Caladea-Regular.ttf') format('truetype');
+  font-weight: normal;
+  font-style: normal;
+}
+@font-face {
+  font-family: 'Caladea';
+  src: url('/fonts/Caladea-Bold.ttf') format('truetype');
+  font-weight: bold;
+  font-style: normal;
+}
+@font-face {
+  font-family: 'Caladea';
+  src: url('/fonts/Caladea-Italic.ttf') format('truetype');
+  font-weight: normal;
+  font-style: italic;
+}
+@font-face {
+  font-family: 'Caladea';
+  src: url('/fonts/Caladea-BoldItalic.ttf') format('truetype');
+  font-weight: bold;
+  font-style: italic;
+}
+
+/* Carlito (Calibri clone) */
+@font-face {
+  font-family: 'Carlito';
+  src: url('/fonts/Carlito-Regular.ttf') format('truetype');
+  font-weight: normal;
+  font-style: normal;
+}
+@font-face {
+  font-family: 'Carlito';
+  src: url('/fonts/Carlito-Bold.ttf') format('truetype');
+  font-weight: bold;
+  font-style: normal;
+}
+@font-face {
+  font-family: 'Carlito';
+  src: url('/fonts/Carlito-Italic.ttf') format('truetype');
+  font-weight: normal;
+  font-style: italic;
+}
+@font-face {
+  font-family: 'Carlito';
+  src: url('/fonts/Carlito-BoldItalic.ttf') format('truetype');
+  font-weight: bold;
+  font-style: italic;
+}

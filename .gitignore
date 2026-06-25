@@ -1,0 +1,29 @@
+# dependencies
+/node_modules
+
+# python (pdf-svc)
+.venv/
+__pycache__/
+*.pyc
+
+# next.js
+/.next/
+/out/
+/build
+next-env.d.ts
+tsconfig.tsbuildinfo
+
+# env files (never commit secrets)
+.env
+.env*.local
+
+# local document storage (user uploads / PDFs)
+/.data
+
+# misc
+*.pem
+.DS_Store
+npm-debug.log*
+
+# stray cookie/credential dumps
+*.txt

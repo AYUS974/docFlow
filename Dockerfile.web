@@ -1,0 +1,27 @@
+# --- Build stage -----------------------------------------------------------
+FROM node:20-slim AS builder
+WORKDIR /app
+
+# Prisma is no longer used (replaced by the folder store); skip its
+# postinstall generate step so a schema-less install doesn't fail the build.
+ENV PRISMA_SKIP_POSTINSTALL_GENERATE=true
+
+COPY package.json package-lock.json ./
+RUN npm ci
+
+COPY . .
+# next.config.ts uses output:"standalone"; the build script also copies
+# static/ and public/ into .next/standalone.
+RUN npm run build
+
+# --- Runtime stage ---------------------------------------------------------
+FROM node:20-slim AS runner
+WORKDIR /app
+ENV NODE_ENV=production
+ENV PORT=3000
+
+# Standalone bundle already contains server.js, .next/static and public/.
+COPY --from=builder /app/.next/standalone ./
+
+EXPOSE 3000
+CMD ["node", "server.js"]

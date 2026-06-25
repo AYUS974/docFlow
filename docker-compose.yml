@@ -1,0 +1,33 @@
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      # Inside the compose network the engine is reachable by service name.
+      - PDF_SVC_URL=http://pdf-svc:8000
+      # Folder store lives on a named volume so documents survive restarts.
+      - STORAGE_DIR=/data
+    volumes:
+      - docflow-data:/data
+    depends_on:
+      - pdf-svc
+
+  pdf-svc:
+    build:
+      context: ./pdf-svc
+    # Exposed on the host for local testing; web talks to it over the network.
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0) if urllib.request.urlopen('http://localhost:8000/health').status==200 else sys.exit(1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+volumes:
+  docflow-data:
