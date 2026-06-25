@@ -1,6 +1,6 @@
 'use client'
-import { useEffect, useRef, useCallback, useState, Fragment } from 'react'
-import { useAppStore, type PDFTextItem, groupTextItemsIntoLines, groupLinesIntoParagraphs, matchMetricFont, METRIC_FONTS } from '@/store/app-store'
+import { useEffect, useRef, useCallback, useState, useMemo, Fragment } from 'react'
+import { useAppStore, type PDFTextItem, type PDFTextLine, groupTextItemsIntoLines, groupLinesIntoParagraphs, matchMetricFont, METRIC_FONTS } from '@/store/app-store'
 import * as pdfjsLib from 'pdfjs-dist'
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdf-worker/pdf.worker.min.mjs'
@@ -12,6 +12,55 @@ const CSS_FONT_MAP: Record<string, string> = {
 }
 const FONT_LABELS: Record<string, string> = { Helvetica: 'Sans', TimesRoman: 'Serif', Courier: 'Mono' }
 
+// PDF.js returns a single visual line as many fragmented text items (font
+// changes, kerning and word-spacing each start a new run). Editing per fragment
+// is what made a line "break into chunks" when clicked. We merge every fragment
+// that grouping placed on the same line into ONE editable item, so a click
+// selects (and edits) the whole line. The merged item exposes the same fields
+// every consumer reads (geometry + font), so the store/export need no changes.
+function mergeLineItem(line: PDFTextLine, pageNumber: number, lineIndex: number): PDFTextItem {
+  const items = line.items // already sorted left-to-right by createTextLine()
+  // The widest run best represents the line's dominant font/metrics.
+  const dominant = items.reduce((a, b) => (b.width > a.width ? b : a), items[0])
+
+  // Re-join the fragments, inserting a space wherever there is a visible gap
+  // that the original glyph runs implied but did not encode as a character.
+  let text = ''
+  let prevEnd: number | null = null
+  for (const it of items) {
+    if (prevEnd !== null) {
+      const gap = it.x - prevEnd
+      const spaceWidth = it.fontSize * 0.25
+      if (gap > spaceWidth && !text.endsWith(' ') && !it.str.startsWith(' ')) {
+        text += ' '
+      }
+    }
+    text += it.str
+    prevEnd = it.x + it.width
+  }
+
+  const fontSize = dominant.fontSize
+  return {
+    id: `line-${pageNumber}-${lineIndex}`,
+    text,
+    str: text,
+    x: line.x,
+    y: line.y,
+    width: line.width,
+    height: line.height,
+    fontSize,
+    fontFamily: dominant.fontFamily,
+    pageNumber,
+    transform: dominant.transform,
+    hasEOL: true,
+    dir: dominant.dir,
+    widthInChars: fontSize > 0 ? Math.round(line.width / (fontSize * 0.52)) : text.length,
+    lineHeight: line.height * 1.2,
+    lineIndex,
+    paragraphIndex: line.paragraphIndex,
+  }
+}
+
 interface TextLayerProps {
   pdfDoc: pdfjsLib.PDFDocumentProxy | null
   canvasEl: HTMLCanvasElement | null
@@ -20,7 +69,7 @@ interface TextLayerProps {
 
 export function TextLayer({ pdfDoc, canvasEl, containerEl }: TextLayerProps) {
   const {
-    currentPage, zoom, textItems, setTextItems,
+    currentPage, zoom, setTextItems,
     textLines, setTextLines,
     textParagraphs, setTextParagraphs,
     editingTextItem, setEditingTextItem,
@@ -39,8 +88,15 @@ export function TextLayer({ pdfDoc, canvasEl, containerEl }: TextLayerProps) {
   // Drag state for repositioning a committed edit ("pick & place").
   const dragRef = useRef<{ id: string; startCX: number; startCY: number; startX: number; startY: number; moved: boolean } | null>(null)
 
+  // One editable unit per visual line (see mergeLineItem) — this is what the
+  // user hovers, clicks and edits, instead of raw PDF.js fragments.
+  const lineItems = useMemo(
+    () => textLines.map((line, i) => mergeLineItem(line, currentPage, i)),
+    [textLines, currentPage]
+  )
+
   // --- Inline toolbar handlers ---
-  const activeItem = editingTextItem || (selectedEditId ? (textEdits.get(selectedEditId)?.original || textItems.find(i => i.id === selectedEditId)) : null)
+  const activeItem = editingTextItem || (selectedEditId ? (textEdits.get(selectedEditId)?.original || lineItems.find(i => i.id === selectedEditId)) : null)
   const activeEdit = activeItem ? textEdits.get(activeItem.id) : null
   const showToolbar = !!activeItem && currentTool === 'editText'
 
@@ -265,7 +321,7 @@ export function TextLayer({ pdfDoc, canvasEl, containerEl }: TextLayerProps) {
       onMouseLeave={endEditDrag}
       onMouseDown={(e) => { if (e.target === e.currentTarget) setSelectedEditId(null) }}
     >
-      {textItems.map((item) => {
+      {lineItems.map((item) => {
         const editedText = getEditedText(item.id)
         const isEditing = editingTextItem?.id === item.id
         
