@@ -509,6 +509,7 @@ export const useAppStore = create<AppState>()(
       _undoStack: [...state._undoStack, state.annotations],
       canUndo: true,
       canRedo: state._redoStack.length > 1,
+    }
   }),
   saveToUndoStack: () => set((state) => ({
     _undoStack: [...state._undoStack, state.annotations],
