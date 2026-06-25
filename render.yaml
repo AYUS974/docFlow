@@ -1,0 +1,41 @@
+# Render Blueprint — deploys DocFlow as two services on Render.
+# Web (Next.js) is public; the PDF engine is a private service reachable only
+# over Render's internal network. Mirrors docker-compose.yml.
+#
+# To deploy: Render Dashboard -> New -> Blueprint -> connect this repo.
+services:
+  # ---- Next.js web app (public) -------------------------------------------
+  - type: web
+    name: docflow-web
+    runtime: docker
+    dockerfilePath: ./Dockerfile.web
+    dockerContext: .
+    region: singapore
+    plan: starter            # 512 MB; bump if builds/usage need more
+    healthCheckPath: /
+    # Persistent disk so uploaded documents survive restarts/deploys.
+    # storage.ts writes to STORAGE_DIR; we mount the disk there.
+    disk:
+      name: docflow-data
+      mountPath: /data
+      sizeGB: 1
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: STORAGE_DIR
+        value: /data
+      # Internal URL of the private PDF service (name:port on Render's network).
+      - key: PDF_SVC_URL
+        value: http://docflow-pdf-svc:8000
+
+  # ---- Python PDF engine (private, internal-only) -------------------------
+  - type: pserv
+    name: docflow-pdf-svc
+    runtime: docker
+    dockerfilePath: ./pdf-svc/Dockerfile
+    dockerContext: ./pdf-svc
+    region: singapore
+    plan: standard           # LibreOffice/OCR are RAM-hungry; 2 GB recommended
+    envVars:
+      - key: PORT
+        value: "8000"
