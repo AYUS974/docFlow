@@ -516,29 +516,6 @@ export function LandingPage() {
       </section>
       */}
 
-      {/* Trust Bar */}
-      <section className="py-16 border-y border-border/40">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="text-center mb-10">
-            <p className="text-sm font-medium text-muted-foreground uppercase tracking-wider">
-              Trusted by teams at
-            </p>
-          </div>
-          <div className="flex flex-wrap items-center justify-center gap-x-12 gap-y-6 opacity-50">
-            {['Acme Corp', 'Globex', 'Initech', 'Umbrella', 'Stark Industries', 'Wayne Ent.'].map(
-              (company) => (
-                <div
-                  key={company}
-                  className="text-lg sm:text-xl font-bold text-muted-foreground"
-                >
-                  {company}
-                </div>
-              )
-            )}
-          </div>
-        </div>
-      </section>
-
       {/* CTA Section */}
       <section className="py-20 sm:py-28">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -597,17 +574,7 @@ export function LandingPage() {
               <ul className="space-y-2">
                 {['Features', 'Changelog', 'Roadmap'].map((item) => (
                   <li key={item}>
-                    <button
-                      className="text-sm text-muted-foreground hover:text-foreground transition-colors"
-                      onClick={() => {
-                        if (item === 'Pricing') {
-                          const section = document.getElementById('pricing')
-                          section?.scrollIntoView({ behavior: 'smooth' })
-                        }
-                      }}
-                    >
-                      {item}
-                    </button>
+                    <span className="text-sm text-muted-foreground">{item}</span>
                   </li>
                 ))}
               </ul>
@@ -650,11 +617,9 @@ export function LandingPage() {
               />
             </a>
 
-            <div className="flex flex-col items-center gap-1.5 text-center">
-              <p className="text-sm text-muted-foreground">
-                &copy; 2026 DocFlow. All rights reserved.
-              </p>
-            </div>
+            <p className="text-sm text-muted-foreground">
+              &copy; 2026 DocFlow. All rights reserved.
+            </p>
           </div>
         </div>
       </footer>
