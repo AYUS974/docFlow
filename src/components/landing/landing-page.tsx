@@ -635,28 +635,29 @@ export function LandingPage() {
               </ul>
             </div>
           </div>
-          <div className="border-t border-border/40 pt-8 flex flex-col sm:flex-row items-center justify-between gap-4">
-            <p className="text-sm text-muted-foreground">
-              &copy; 2026 DocFlow. All rights reserved.
-            </p>
-            
+          <div className="border-t border-border/40 pt-8 flex flex-col items-center gap-4">
             <a
-              href="https://ayuslabs.com"
+              href="https://www.ayuslabs.com"
               target="_blank"
               rel="noopener noreferrer"
-              className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full border border-border/60 bg-[#0c0f16] hover:bg-[#121622] text-[#f8fafc] hover:text-[#ffffff] transition-all text-xs font-semibold shadow-sm shrink-0"
+              className="group inline-flex items-center gap-2.5 px-5 py-2 rounded-full border border-white/10 bg-white/[0.03] backdrop-blur-sm hover:border-white/20 hover:bg-white/[0.06] transition-all text-xs font-medium text-foreground/90 shadow-[0_0_22px_rgba(120,120,255,0.07)] hover:shadow-[0_0_28px_rgba(120,120,255,0.14)]"
             >
               <span>Powered By</span>
               <img
                 src="/ayus-logo.jpeg"
                 alt="AYUS Labs"
-                className="w-5.5 h-5.5 rounded-full object-cover"
+                className="w-6 h-6 rounded-full object-cover ring-1 ring-white/10"
               />
             </a>
 
-            <div className="flex items-center gap-2 text-sm text-muted-foreground">
-              <Shield className="w-4 h-4" />
-              <span>SOC 2 Certified &middot; GDPR Compliant</span>
+            <div className="flex flex-col items-center gap-1.5 text-center">
+              <p className="text-sm text-muted-foreground">
+                &copy; 2026 DocFlow. All rights reserved.
+              </p>
+              <div className="flex items-center gap-2 text-xs text-muted-foreground/70">
+                <Shield className="w-3.5 h-3.5" />
+                <span>SOC 2 Certified &middot; GDPR Compliant</span>
+              </div>
             </div>
           </div>
         </div>
