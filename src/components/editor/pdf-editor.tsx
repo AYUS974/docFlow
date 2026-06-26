@@ -29,6 +29,7 @@ import fontkit from '@pdf-lib/fontkit'
 import { TextLayer } from './text-layer'
 import { SignaturePad } from './signature-pad'
 import { PageManager } from './page-manager'
+import { Slider } from '@/components/ui/slider'
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdf-worker/pdf.worker.min.mjs'
 
@@ -128,9 +129,12 @@ export function PdfEditor() {
   const [isDraggingAnnot, setIsDraggingAnnot] = useState(false)
   const [dragAnnotStart, setDragAnnotStart] = useState<{ x: number; y: number; annotX: number; annotY: number; points?: { x: number; y: number }[] } | null>(null)
   const [editingAnnotId, setEditingAnnotId] = useState<string | null>(null)
+  const [isResizingAnnot, setIsResizingAnnot] = useState(false)
+  const [resizeAnnotStart, setResizeAnnotStart] = useState<{ x: number; y: number; annotW: number; annotH: number; ratio: number } | null>(null)
   const [textBold, setTextBold] = useState(false)
   const [textItalic, setTextItalic] = useState(false)
   const textSubmitRef = useRef<() => void>(() => {})
+  const isSpawningRef = useRef(false)
   const [annotFontDropdownId, setAnnotFontDropdownId] = useState<string | null>(null)
   const [annotSizeDropdownId, setAnnotSizeDropdownId] = useState<string | null>(null)
   const [annotColorDropdownId, setAnnotColorDropdownId] = useState<string | null>(null)
@@ -200,8 +204,10 @@ export function PdfEditor() {
     if (textInput.visible) {
       textSubmitRef.current()
     }
-    setSelectedAnnotId(null)
-    setEditingAnnotId(null)
+    if (currentTool !== 'select' && currentTool !== 'text' && currentTool !== 'editText') {
+      setSelectedAnnotId(null)
+      setEditingAnnotId(null)
+    }
     if (isCropping) {
       setCropping(false)
       setCropBox(null)
@@ -288,7 +294,6 @@ export function PdfEditor() {
   }, [currentPage, zoom, pdfReady, pageRotations])
 
   useEffect(() => { renderPage() }, [renderPage])
-  useEffect(() => { renderAnnotations() }, [annotations, currentPage])
   // Render annotations overlay
   const renderAnnotations = useCallback(() => {
     const overlay = overlayCanvasRef.current
@@ -442,10 +447,29 @@ export function PdfEditor() {
           x = minX; y = minY; w = maxX - minX; h = maxY - minY
         }
         ctx.strokeRect(x * scale - 4, y * scale - 4, w * scale + 8, h * scale + 8)
+
+        // Draw resize handle at bottom-right corner for resizable annotations
+        // (all except text, draw, and line)
+        if (selectedAnnot.type !== 'text' && selectedAnnot.type !== 'draw' && selectedAnnot.type !== 'line') {
+          ctx.setLineDash([])
+          ctx.fillStyle = '#3b82f6'
+          ctx.strokeStyle = '#ffffff'
+          ctx.lineWidth = 1
+          
+          const handleX = (x + w) * scale + 4
+          const handleY = (y + h) * scale + 4
+          const handleSize = 8
+          
+          ctx.fillRect(handleX - handleSize / 2, handleY - handleSize / 2, handleSize, handleSize)
+          ctx.strokeRect(handleX - handleSize / 2, handleY - handleSize / 2, handleSize, handleSize)
+        }
         ctx.restore()
       }
     }
   }, [annotations, currentPage, zoom, textEdits, isCropping, cropBox, selectedAnnotId])
+
+  useEffect(() => { renderAnnotations() }, [renderAnnotations])
+
   const getCanvasCoords = (e: React.MouseEvent | React.TouchEvent) => {
     const overlay = overlayCanvasRef.current
     if (!overlay) return { x: 0, y: 0 }
@@ -467,6 +491,34 @@ export function PdfEditor() {
     const coords = getCanvasCoords(e)
 
     if (currentTool === 'select') {
+      // Check if user clicked the resize handle of the selected annotation
+      if (selectedAnnotId) {
+        const selectedAnnot = annotations.find(a => a.id === selectedAnnotId)
+        if (selectedAnnot && selectedAnnot.pageNumber === currentPage) {
+          const scale = zoom * 1.5
+          let x = selectedAnnot.x, y = selectedAnnot.y, w = selectedAnnot.width || 100, h = selectedAnnot.height || 50
+          if (selectedAnnot.type !== 'text' && selectedAnnot.type !== 'draw' && selectedAnnot.type !== 'line') {
+            const handleX = x + w + 4 / scale
+            const handleY = y + h + 4 / scale
+            const dist = Math.sqrt((coords.x - handleX) ** 2 + (coords.y - handleY) ** 2)
+            const clickThreshold = 12 / scale
+            
+            if (dist <= clickThreshold) {
+              saveToUndoStack()
+              setIsResizingAnnot(true)
+              setResizeAnnotStart({
+                x: coords.x,
+                y: coords.y,
+                annotW: w,
+                annotH: h,
+                ratio: w / h
+              })
+              return
+            }
+          }
+        }
+      }
+
       const pageAnnots = annotations.filter((a) => a.pageNumber === currentPage)
       for (let i = pageAnnots.length - 1; i >= 0; i--) {
         const annot = pageAnnots[i]
@@ -503,23 +555,29 @@ export function PdfEditor() {
     // Signature: place at click
     if (currentTool === 'signature') {
       if (!signatureData) { setShowSignaturePad(true); return }
+      const newId = crypto.randomUUID()
       addAnnotation({
-        id: crypto.randomUUID(), type: 'signature', pageNumber: currentPage,
+        id: newId, type: 'signature', pageNumber: currentPage,
         x: coords.x, y: coords.y, width: 150, height: 50, color: '#000000',
         signatureData,
       })
+      setSelectedAnnotId(newId)
+      setCurrentTool('select')
       return
     }
 
     // Image: place pending image at click
     if (currentTool === 'image') {
       if (!pendingImageData) { fileInputRef.current?.click(); return }
+      const newId = crypto.randomUUID()
       addAnnotation({
-        id: crypto.randomUUID(), type: 'image', pageNumber: currentPage,
+        id: newId, type: 'image', pageNumber: currentPage,
         x: coords.x, y: coords.y, width: 200, height: 150, color: '#000000',
         imageData: pendingImageData,
       })
       setPendingImageData(null)
+      setSelectedAnnotId(newId)
+      setCurrentTool('select')
       return
     }
 
@@ -539,6 +597,38 @@ export function PdfEditor() {
   }
 
   const handlePointerMove = (e: React.MouseEvent | React.TouchEvent) => {
+    // 1. Resizing logic
+    if (isResizingAnnot && resizeAnnotStart && selectedAnnotId) {
+      const coords = getCanvasCoords(e)
+      const dx = coords.x - resizeAnnotStart.x
+      const dy = coords.y - resizeAnnotStart.y
+      
+      const selectedAnnot = annotations.find(a => a.id === selectedAnnotId)
+      if (!selectedAnnot) return
+      
+      let newW = resizeAnnotStart.annotW + dx
+      let newH = resizeAnnotStart.annotH + dy
+      
+      newW = Math.max(10, newW)
+      newH = Math.max(10, newH)
+      
+      if (selectedAnnot.type === 'image' || selectedAnnot.type === 'signature') {
+        const ratio = resizeAnnotStart.ratio
+        if (Math.abs(dx) > Math.abs(dy)) {
+          newH = newW / ratio
+        } else {
+          newW = newH * ratio
+        }
+      }
+      
+      updateAnnotation(selectedAnnotId, {
+        width: newW,
+        height: newH
+      })
+      return
+    }
+
+    // 2. Dragging logic
     if (isDraggingAnnot && dragAnnotStart && selectedAnnotId) {
       const coords = getCanvasCoords(e)
       const dx = coords.x - dragAnnotStart.x
@@ -556,6 +646,29 @@ export function PdfEditor() {
         })
       }
       return
+    }
+
+    // 3. Hover resize cursor logic
+    if (!isDrawing && !isDraggingAnnot && !isResizingAnnot && selectedAnnotId) {
+      const selectedAnnot = annotations.find(a => a.id === selectedAnnotId)
+      if (selectedAnnot && selectedAnnot.pageNumber === currentPage) {
+        if (selectedAnnot.type !== 'text' && selectedAnnot.type !== 'draw' && selectedAnnot.type !== 'line') {
+          const coords = getCanvasCoords(e)
+          const scale = zoom * 1.5
+          const handleX = selectedAnnot.x + (selectedAnnot.width || 100) + 4 / scale
+          const handleY = selectedAnnot.y + (selectedAnnot.height || 50) + 4 / scale
+          const dist = Math.sqrt((coords.x - handleX) ** 2 + (coords.y - handleY) ** 2)
+          const overlay = overlayCanvasRef.current
+          if (overlay) {
+            if (dist <= 12 / scale) {
+              overlay.style.cursor = 'se-resize'
+              return
+            } else {
+              overlay.style.cursor = isPanMode ? 'grab' : isCropping ? 'crosshair' : 'default'
+            }
+          }
+        }
+      }
     }
 
     if (!isDrawing || !drawStartRef.current) return
@@ -607,6 +720,11 @@ export function PdfEditor() {
   }
 
   const handlePointerUp = (e: React.MouseEvent | React.TouchEvent) => {
+    if (isResizingAnnot) {
+      setIsResizingAnnot(false)
+      setResizeAnnotStart(null)
+      return
+    }
     if (isDraggingAnnot) {
       setIsDraggingAnnot(false)
       setDragAnnotStart(null)
@@ -675,13 +793,8 @@ export function PdfEditor() {
       } else {
         const ax = annot.x, ay = annot.y, aw = annot.width || 50, ah = annot.height || 30
         if (coords.x >= ax && coords.x <= ax + aw && coords.y >= ay && coords.y <= ay + ah) {
-          saveToUndoStack()
-          setTextInput({ x: annot.x, y: annot.y, visible: true })
-          setTextInputValue(annot.content || '')
-          setEditingAnnotId(annot.id)
-          return
+          hit = true
         }
-        if (coords.x >= ax && coords.x <= ax + aw && coords.y >= ay && coords.y <= ay + ah) hit = true
       }
       if (hit) { removeAnnotation(annot.id); showStatus(`Removed ${annot.type}`); return }
     }
@@ -694,7 +807,9 @@ export function PdfEditor() {
       // If a text box is already open for editing, this click is the user
       // committing it (the blur handler does the commit) — don't also spawn a
       // brand-new box, or every "click away" would duplicate the text.
-      if (editingAnnotId) return
+      if (editingAnnotId || isSpawningRef.current) return
+      isSpawningRef.current = true
+
       const coords = getCanvasCoords(e)
       const newAnnotId = crypto.randomUUID()
       addAnnotation({
@@ -712,6 +827,11 @@ export function PdfEditor() {
       })
       setSelectedAnnotId(newAnnotId)
       setEditingAnnotId(newAnnotId)
+
+      setTimeout(() => {
+        isSpawningRef.current = false
+      }, 300)
+
       // Drop back to the Select tool so subsequent clicks edit/move this box
       // instead of dropping more text boxes onto the page.
       setCurrentTool('select')
@@ -1481,6 +1601,69 @@ export function PdfEditor() {
           </div>
         )}
 
+        {selectedAnnotId && selectedAnnot && ['signature', 'image', 'rectangle', 'ellipse', 'redact', 'whiteout'].includes(selectedAnnot.type) && (
+          <div className="flex items-center gap-1.5 shrink-0 select-none">
+            <span className="text-xs text-muted-foreground uppercase font-bold shrink-0">Size:</span>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-7 w-7"
+              onClick={() => {
+                const w = selectedAnnot.width || (selectedAnnot.type === 'signature' ? 150 : selectedAnnot.type === 'image' ? 200 : 100)
+                const h = selectedAnnot.height || (selectedAnnot.type === 'signature' ? 50 : selectedAnnot.type === 'image' ? 150 : 50)
+                const ratio = h > 0 ? w / h : 1
+                const newW = Math.max(10, w - 10)
+                const newH = selectedAnnot.type === 'signature' || selectedAnnot.type === 'image'
+                  ? newW / ratio
+                  : Math.max(10, h - 10)
+                saveToUndoStack()
+                updateAnnotation(selectedAnnot.id, { width: newW, height: newH })
+              }}
+            >
+              <Minus className="w-3 h-3" />
+            </Button>
+            <div className="w-24 px-1 flex items-center">
+              <Slider
+                value={[selectedAnnot.width || 100]}
+                min={20}
+                max={800}
+                step={2}
+                onValueChange={(val) => {
+                  const newW = val[0]
+                  const w = selectedAnnot.width || (selectedAnnot.type === 'signature' ? 150 : selectedAnnot.type === 'image' ? 200 : 100)
+                  const h = selectedAnnot.height || (selectedAnnot.type === 'signature' ? 50 : selectedAnnot.type === 'image' ? 150 : 50)
+                  const ratio = h > 0 ? w / h : 1
+                  const newH = selectedAnnot.type === 'signature' || selectedAnnot.type === 'image'
+                    ? newW / ratio
+                    : h
+                  updateAnnotation(selectedAnnot.id, { width: newW, height: newH })
+                }}
+              />
+            </div>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-7 w-7"
+              onClick={() => {
+                const w = selectedAnnot.width || (selectedAnnot.type === 'signature' ? 150 : selectedAnnot.type === 'image' ? 200 : 100)
+                const h = selectedAnnot.height || (selectedAnnot.type === 'signature' ? 50 : selectedAnnot.type === 'image' ? 150 : 50)
+                const ratio = h > 0 ? w / h : 1
+                const newW = Math.min(1000, w + 10)
+                const newH = selectedAnnot.type === 'signature' || selectedAnnot.type === 'image'
+                  ? newW / ratio
+                  : Math.min(1000, h + 10)
+                saveToUndoStack()
+                updateAnnotation(selectedAnnot.id, { width: newW, height: newH })
+              }}
+            >
+              <Plus className="w-3 h-3" />
+            </Button>
+            <span className="text-xs text-muted-foreground font-mono w-10 text-right">
+              {Math.round(selectedAnnot.width || 0)}px
+            </span>
+          </div>
+        )}
+
         {/* Mode indicators */}
         {isEditTextMode && <span className="text-xs bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 px-2 py-0.5 rounded-full shrink-0">Click text to edit</span>}
         {isSignatureMode && <span className="text-xs bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300 px-2 py-0.5 rounded-full shrink-0">Click to place signature</span>}
@@ -1852,7 +2035,7 @@ export function PdfEditor() {
                   if (isEditing) {
                     return (
                       <div
-                        key={annot.id}
+                        key={`edit-${annot.id}`}
                         contentEditable
                         suppressContentEditableWarning
                         onBlur={(e) => {
@@ -1910,17 +2093,13 @@ export function PdfEditor() {
                   
                   return (
                     <div
-                      key={annot.id}
+                      key={`view-${annot.id}`}
                       style={style}
                       onMouseDown={(e) => handleStartDrag(e, annot)}
                       onClick={(e) => {
                         e.stopPropagation()
                         if (isSelectOrTextTool) {
-                          if (selectedAnnotId === annot.id) {
-                            setEditingAnnotId(annot.id)
-                          } else {
-                            setSelectedAnnotId(annot.id)
-                          }
+                          setSelectedAnnotId(annot.id)
                         }
                       }}
                       onDoubleClick={(e) => {
@@ -2121,12 +2300,14 @@ export function PdfEditor() {
                           {/* Duplicate Button */}
                           <button
                             onClick={() => {
+                              const newId = crypto.randomUUID()
                               addAnnotation({
                                 ...annot,
-                                id: crypto.randomUUID(),
+                                id: newId,
                                 x: annot.x + 20,
                                 y: annot.y + 20
                               })
+                              setSelectedAnnotId(newId)
                             }}
                             className="w-7 h-7 flex items-center justify-center rounded text-slate-500 hover:text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-950/30 transition-colors"
                             title="Duplicate"
@@ -2199,7 +2380,7 @@ export function PdfEditor() {
       </div>
 
       {/* ===== MOBILE FORMATTING SUB-TOOLBAR ===== */}
-      {isMobile && (['draw', 'rectangle', 'ellipse', 'line', 'text', 'editText'].includes(currentTool) || (currentTool === 'select' && selectedAnnot?.type === 'text')) && (
+      {isMobile && (['draw', 'rectangle', 'ellipse', 'line', 'text', 'editText'].includes(currentTool) || (currentTool === 'select' && selectedAnnot)) && (
         <div className="flex flex-col gap-2 p-2 border-t border-border/40 bg-background shrink-0 z-30 select-none">
           {/* Colors (horizontal scroll) */}
           <div className="flex items-center gap-2 overflow-x-auto py-1 px-1" style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}>
@@ -2300,6 +2481,69 @@ export function PdfEditor() {
                     I
                   </Button>
                 </div>
+              </div>
+            )}
+
+            {selectedAnnotId && selectedAnnot && ['signature', 'image', 'rectangle', 'ellipse', 'redact', 'whiteout'].includes(selectedAnnot.type) && (
+              <div className="flex items-center gap-2 w-full justify-between select-none py-0.5">
+                <span className="text-[10px] text-muted-foreground uppercase font-bold shrink-0">Size:</span>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-7 w-7 shrink-0"
+                  onClick={() => {
+                    const w = selectedAnnot.width || (selectedAnnot.type === 'signature' ? 150 : selectedAnnot.type === 'image' ? 200 : 100)
+                    const h = selectedAnnot.height || (selectedAnnot.type === 'signature' ? 50 : selectedAnnot.type === 'image' ? 150 : 50)
+                    const ratio = h > 0 ? w / h : 1
+                    const newW = Math.max(10, w - 10)
+                    const newH = selectedAnnot.type === 'signature' || selectedAnnot.type === 'image'
+                      ? newW / ratio
+                      : Math.max(10, h - 10)
+                    saveToUndoStack()
+                    updateAnnotation(selectedAnnot.id, { width: newW, height: newH })
+                  }}
+                >
+                  <Minus className="w-3.5 h-3.5" />
+                </Button>
+                <div className="flex-1 px-2 min-w-[100px] flex items-center">
+                  <Slider
+                    value={[selectedAnnot.width || 100]}
+                    min={20}
+                    max={600}
+                    step={2}
+                    onValueChange={(val) => {
+                      const newW = val[0]
+                      const w = selectedAnnot.width || (selectedAnnot.type === 'signature' ? 150 : selectedAnnot.type === 'image' ? 200 : 100)
+                      const h = selectedAnnot.height || (selectedAnnot.type === 'signature' ? 50 : selectedAnnot.type === 'image' ? 150 : 50)
+                      const ratio = h > 0 ? w / h : 1
+                      const newH = selectedAnnot.type === 'signature' || selectedAnnot.type === 'image'
+                        ? newW / ratio
+                        : h
+                      updateAnnotation(selectedAnnot.id, { width: newW, height: newH })
+                    }}
+                  />
+                </div>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-7 w-7 shrink-0"
+                  onClick={() => {
+                    const w = selectedAnnot.width || (selectedAnnot.type === 'signature' ? 150 : selectedAnnot.type === 'image' ? 200 : 100)
+                    const h = selectedAnnot.height || (selectedAnnot.type === 'signature' ? 50 : selectedAnnot.type === 'image' ? 150 : 50)
+                    const ratio = h > 0 ? w / h : 1
+                    const newW = Math.min(800, w + 10)
+                    const newH = selectedAnnot.type === 'signature' || selectedAnnot.type === 'image'
+                      ? newW / ratio
+                      : Math.min(800, h + 10)
+                    saveToUndoStack()
+                    updateAnnotation(selectedAnnot.id, { width: newW, height: newH })
+                  }}
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                </Button>
+                <span className="text-xs font-semibold font-mono w-12 text-right shrink-0">
+                  {Math.round(selectedAnnot.width || 0)}px
+                </span>
               </div>
             )}
           </div>

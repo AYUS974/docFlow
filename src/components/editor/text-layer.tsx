@@ -61,6 +61,36 @@ function mergeLineItem(line: PDFTextLine, pageNumber: number, lineIndex: number)
   }
 }
 
+function mergeCloseItems(items: PDFTextItem[]): PDFTextItem[] {
+  if (items.length <= 1) return items
+  
+  const merged: PDFTextItem[] = []
+  let current = { ...items[0] }
+  
+  for (let i = 1; i < items.length; i++) {
+    const next = items[i]
+    const sameLine = Math.abs(current.y - next.y) < (current.height * 0.4)
+    const gap = next.x - (current.x + current.width)
+    const spaceWidth = current.fontSize * 0.25
+    
+    if (sameLine && gap < spaceWidth && !current.text.endsWith(' ') && !next.text.startsWith(' ')) {
+      current.text += next.text
+      current.str = current.text
+      current.width = (next.x + next.width) - current.x
+      if (next.width > current.width) {
+        current.fontSize = next.fontSize
+        current.fontFamily = next.fontFamily
+      }
+      current.widthInChars = current.fontSize > 0 ? Math.round(current.width / (current.fontSize * 0.52)) : current.text.length
+    } else {
+      merged.push(current)
+      current = { ...next }
+    }
+  }
+  merged.push(current)
+  return merged
+}
+
 interface TextLayerProps {
   pdfDoc: pdfjsLib.PDFDocumentProxy | null
   canvasEl: HTMLCanvasElement | null
@@ -69,7 +99,7 @@ interface TextLayerProps {
 
 export function TextLayer({ pdfDoc, canvasEl, containerEl }: TextLayerProps) {
   const {
-    currentPage, zoom, setTextItems,
+    currentPage, zoom, textItems, setTextItems,
     textLines, setTextLines,
     textParagraphs, setTextParagraphs,
     editingTextItem, setEditingTextItem,
@@ -77,7 +107,6 @@ export function TextLayer({ pdfDoc, canvasEl, containerEl }: TextLayerProps) {
     duplicateTextEdit,
   } = useAppStore()
 
-  const [editingValue, setEditingValue] = useState('')
   const [hoveredItemId, setHoveredItemId] = useState<string | null>(null)
   const [selectedEditId, setSelectedEditId] = useState<string | null>(null)
   const [showFontDropdown, setShowFontDropdown] = useState(false)
@@ -88,15 +117,8 @@ export function TextLayer({ pdfDoc, canvasEl, containerEl }: TextLayerProps) {
   // Drag state for repositioning a committed edit ("pick & place").
   const dragRef = useRef<{ id: string; startCX: number; startCY: number; startX: number; startY: number; moved: boolean } | null>(null)
 
-  // One editable unit per visual line (see mergeLineItem) — this is what the
-  // user hovers, clicks and edits, instead of raw PDF.js fragments.
-  const lineItems = useMemo(
-    () => textLines.map((line, i) => mergeLineItem(line, currentPage, i)),
-    [textLines, currentPage]
-  )
-
   // --- Inline toolbar handlers ---
-  const activeItem = editingTextItem || (selectedEditId ? (textEdits.get(selectedEditId)?.original || lineItems.find(i => i.id === selectedEditId)) : null)
+  const activeItem = editingTextItem || (selectedEditId ? (textEdits.get(selectedEditId)?.original || textItems.find(i => i.id === selectedEditId)) : null)
   const activeEdit = activeItem ? textEdits.get(activeItem.id) : null
   const showToolbar = !!activeItem && currentTool === 'editText'
 
@@ -221,7 +243,7 @@ export function TextLayer({ pdfDoc, canvasEl, containerEl }: TextLayerProps) {
         }
       })
 
-      setTextItems(indexedItems)
+      setTextItems(mergeCloseItems(indexedItems))
       setTextLines(lines)
       setTextParagraphs(paragraphs)
     } catch (err) {
@@ -235,46 +257,35 @@ export function TextLayer({ pdfDoc, canvasEl, containerEl }: TextLayerProps) {
   const handleTextClick = (item: PDFTextItem) => {
     if (currentTool !== 'editText') return
     setEditingTextItem(item)
-    setEditingValue(item.text)
   }
-
-  // Populate the editable box with the original text and focus it once editing
-  // starts. The box is uncontrolled (browser-managed), so we read its value
-  // from the DOM on commit — this is what was missing before.
-  useEffect(() => {
-    if (editingTextItem && editRef.current) {
-      editRef.current.textContent = editingTextItem.text
-      editRef.current.focus()
-      // Place the caret at the end of the text.
-      const sel = window.getSelection()
-      const range = document.createRange()
-      range.selectNodeContents(editRef.current)
-      range.collapse(false)
-      sel?.removeAllRanges()
-      sel?.addRange(range)
-    }
-  }, [editingTextItem])
 
   // When user finishes editing — read the edited text straight from the DOM.
   const handleEditBlur = () => {
-    const newText = (editRef.current?.textContent ?? editingValue).replace(/ /g, ' ')
-    if (editingTextItem && newText !== editingTextItem.text) {
-      addTextEdit(editingTextItem.id, editingTextItem, newText)
-      // Select the new edit so the font popover (detected vs default) shows.
-      setSelectedEditId(editingTextItem.id)
+    const newText = (editRef.current?.textContent ?? '').replace(/ /g, ' ')
+    if (editingTextItem) {
+      const existing = textEdits.get(editingTextItem.id)
+      const currentText = existing ? existing.edited : editingTextItem.text
+      if (newText !== currentText) {
+        if (existing?.isDuplicate) {
+          addTextEdit(editingTextItem.id, editingTextItem, newText)
+        } else if (newText === editingTextItem.text) {
+          removeTextEdit(editingTextItem.id)
+        } else {
+          addTextEdit(editingTextItem.id, editingTextItem, newText)
+        }
+        setSelectedEditId(editingTextItem.id)
+      }
     }
     setEditingTextItem(null)
-    setEditingValue('')
   }
 
   const handleEditKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
-      handleEditBlur()
+      ;(e.currentTarget as HTMLElement).blur()
     }
     if (e.key === 'Escape') {
       setEditingTextItem(null)
-      setEditingValue('')
     }
   }
 
@@ -321,7 +332,7 @@ export function TextLayer({ pdfDoc, canvasEl, containerEl }: TextLayerProps) {
       onMouseLeave={endEditDrag}
       onMouseDown={(e) => { if (e.target === e.currentTarget) setSelectedEditId(null) }}
     >
-      {lineItems.map((item) => {
+      {textItems.map((item) => {
         const editedText = getEditedText(item.id)
         const isEditing = editingTextItem?.id === item.id
         
@@ -351,28 +362,50 @@ export function TextLayer({ pdfDoc, canvasEl, containerEl }: TextLayerProps) {
 
         if (isEditing) {
           return (
-            <div
-              key={item.id}
-              ref={editRef}
-              contentEditable
-              suppressContentEditableWarning
-              onInput={(e) => setEditingValue(e.currentTarget.textContent || '')}
-              onBlur={handleEditBlur}
-              onKeyDown={handleEditKeyDown}
-              style={{
-                ...fontStyle,
-                color: itemColor,
-                background: 'rgba(255,255,255,0.92)',
-                outline: '2px solid #10b981',
-                outlineOffset: '1px',
-                padding: '0 2px',
-                borderRadius: '2px',
-                minWidth: '30px',
-                caretColor: itemColor,
-                boxShadow: '0 1px 4px rgba(0,0,0,0.1)',
-                zIndex: 10,
-              }}
-            />
+            <Fragment key={item.id}>
+              {/* Stationary white mask over the ORIGINAL glyphs while editing */}
+              <div style={{
+                position: 'absolute',
+                left: item.x * scale, top: (item.y - 1) * scale,
+                width: Math.max(item.width, 4) * scale, height: (item.height + 2) * scale,
+                background: 'white', zIndex: 1, pointerEvents: 'none',
+              }} />
+              <div
+                key={item.id}
+                ref={(el) => {
+                  editRef.current = el
+                  if (el && document.activeElement !== el) {
+                    const existing = textEdits.get(item.id)
+                    el.textContent = existing ? existing.edited : item.text
+                    el.focus()
+                    // Place the caret at the end of the text.
+                    const sel = window.getSelection()
+                    const range = document.createRange()
+                    range.selectNodeContents(el)
+                    range.collapse(false)
+                    sel?.removeAllRanges()
+                    sel?.addRange(range)
+                  }
+                }}
+                contentEditable
+                suppressContentEditableWarning
+                onBlur={handleEditBlur}
+                onKeyDown={handleEditKeyDown}
+                style={{
+                  ...fontStyle,
+                  color: itemColor,
+                  background: 'white',
+                  outline: '2px solid #10b981',
+                  outlineOffset: '1px',
+                  padding: '0 2px',
+                  borderRadius: '2px',
+                  minWidth: '30px',
+                  caretColor: itemColor,
+                  boxShadow: '0 1px 4px rgba(0,0,0,0.1)',
+                  zIndex: 10,
+                }}
+              />
+            </Fragment>
           )
         }
 
@@ -395,6 +428,12 @@ export function TextLayer({ pdfDoc, canvasEl, containerEl }: TextLayerProps) {
               <span
                 onMouseDown={(e) => startEditDrag(e, item)}
                 onClick={(e) => { e.stopPropagation(); if (isEditMode) setSelectedEditId(item.id) }}
+                onDoubleClick={(e) => {
+                  e.stopPropagation()
+                  if (isEditMode) {
+                    setEditingTextItem(item)
+                  }
+                }}
                 style={{
                   position: 'absolute',
                   left: ex * scale, top: ey * scale,
@@ -421,7 +460,19 @@ export function TextLayer({ pdfDoc, canvasEl, containerEl }: TextLayerProps) {
         return (
           <span
             key={item.id}
-            onClick={() => handleTextClick(item)}
+            onClick={(e) => {
+              e.stopPropagation()
+              if (isEditMode) {
+                setSelectedEditId(item.id)
+              }
+            }}
+            onDoubleClick={(e) => {
+              e.stopPropagation()
+              if (isEditMode) {
+                setSelectedEditId(item.id)
+                setEditingTextItem(item)
+              }
+            }}
             style={{
               ...fontStyle,
               display: 'inline-block',
@@ -431,6 +482,7 @@ export function TextLayer({ pdfDoc, canvasEl, containerEl }: TextLayerProps) {
               background: isEditMode && isHovered ? 'rgba(16,185,129,0.08)' : 'transparent',
               borderRadius: '2px',
               transition: 'border-color 0.15s, background 0.15s',
+              outline: isEditMode && selectedEditId === item.id ? '1px dashed #10b981' : 'none',
             }}
             onMouseEnter={() => {
               if (isEditMode) {
@@ -474,15 +526,26 @@ export function TextLayer({ pdfDoc, canvasEl, containerEl }: TextLayerProps) {
           return (
             <div
               key={id}
-              ref={editRef}
+              ref={(el) => {
+                editRef.current = el
+                if (el && document.activeElement !== el) {
+                  el.textContent = edit.edited
+                  el.focus()
+                  const sel = window.getSelection()
+                  const range = document.createRange()
+                  range.selectNodeContents(el)
+                  range.collapse(false)
+                  sel?.removeAllRanges()
+                  sel?.addRange(range)
+                }
+              }}
               contentEditable
               suppressContentEditableWarning
-              onInput={(e) => setEditingValue(e.currentTarget.textContent || '')}
               onBlur={handleEditBlur}
               onKeyDown={handleEditKeyDown}
               style={{
                 ...fontStyle,
-                background: 'rgba(255,255,255,0.92)',
+                background: 'white',
                 outline: '2px solid #10b981',
                 outlineOffset: '1px',
                 padding: '0 2px',
@@ -509,12 +572,14 @@ export function TextLayer({ pdfDoc, canvasEl, containerEl }: TextLayerProps) {
             onClick={(e) => {
               e.stopPropagation();
               if (isEditMode) {
-                if (selectedEditId === id) {
-                  setEditingTextItem(edit.original)
-                  setEditingValue(edit.edited)
-                } else {
-                  setSelectedEditId(id)
-                }
+                setSelectedEditId(id)
+              }
+            }}
+            onDoubleClick={(e) => {
+              e.stopPropagation()
+              if (isEditMode) {
+                setSelectedEditId(id)
+                setEditingTextItem(edit.original)
               }
             }}
             style={{
