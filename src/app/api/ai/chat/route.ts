@@ -1,10 +1,8 @@
-import { google } from '@ai-sdk/google'
 import { streamText, convertToModelMessages, type UIMessage } from 'ai'
 import { aiTools, type DocChatContext } from '@/lib/ai/tools'
+import { buildModelChain, withFallbacks } from '@/lib/ai/models'
 
 export const maxDuration = 60
-
-const MODEL = process.env.DOCFLOW_AI_MODEL || 'gemini-2.5-flash'
 
 function buildSystemPrompt(ctx?: DocChatContext | null): string {
   const base = `You are DocFlow AI, the built-in assistant of the DocFlow PDF editor. You edit the user's document by calling tools — the edits are applied live in their editor and they can undo any of them.
@@ -46,9 +44,10 @@ ${ctx.currentPageText ? ctx.currentPageText.slice(0, 6000) : '(no extractable te
 }
 
 export async function POST(req: Request) {
-  if (!process.env.GOOGLE_GENERATIVE_AI_API_KEY) {
+  const chain = buildModelChain()
+  if (chain.length === 0) {
     return Response.json(
-      { error: 'GOOGLE_GENERATIVE_AI_API_KEY is not set. Add it to .env and restart the dev server.' },
+      { error: 'No AI provider key is set. Add GOOGLE_GENERATIVE_AI_API_KEY and/or ZAI_API_KEY to .env and restart the dev server.' },
       { status: 500 },
     )
   }
@@ -56,7 +55,10 @@ export async function POST(req: Request) {
   const { messages, context }: { messages: UIMessage[]; context?: DocChatContext } = await req.json()
 
   const result = streamText({
-    model: google(MODEL),
+    model: withFallbacks(chain),
+    // The chain already fails over across models — don't also retry each
+    // failing model with backoff (that's what made quota errors feel stuck).
+    maxRetries: 1,
     system: buildSystemPrompt(context),
     messages: await convertToModelMessages(messages),
     tools: aiTools,
