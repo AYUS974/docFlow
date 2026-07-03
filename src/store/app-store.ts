@@ -198,6 +198,8 @@ interface AppState {
   toggleSidebar: () => void
   showAnnotationPanel: boolean
   toggleAnnotationPanel: () => void
+  showAiPanel: boolean
+  toggleAiPanel: () => void
   isEditorLoading: boolean
   setEditorLoading: (loading: boolean) => void
 
@@ -528,7 +530,16 @@ export const useAppStore = create<AppState>()(
   showSidebar: true,
   toggleSidebar: () => set((state) => ({ showSidebar: !state.showSidebar })),
   showAnnotationPanel: false,
-  toggleAnnotationPanel: () => set((state) => ({ showAnnotationPanel: !state.showAnnotationPanel })),
+  // The two right-side panels are mutually exclusive — opening one closes the other.
+  toggleAnnotationPanel: () => set((state) => ({
+    showAnnotationPanel: !state.showAnnotationPanel,
+    showAiPanel: state.showAnnotationPanel ? state.showAiPanel : false,
+  })),
+  showAiPanel: false,
+  toggleAiPanel: () => set((state) => ({
+    showAiPanel: !state.showAiPanel,
+    showAnnotationPanel: state.showAiPanel ? state.showAnnotationPanel : false,
+  })),
   isEditorLoading: false,
   setEditorLoading: (loading) => set({ isEditorLoading: loading }),
 

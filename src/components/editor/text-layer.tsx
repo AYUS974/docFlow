@@ -1,6 +1,6 @@
 'use client'
-import { useEffect, useRef, useCallback, useState, useMemo, Fragment } from 'react'
-import { useAppStore, type PDFTextItem, type PDFTextLine, groupTextItemsIntoLines, groupLinesIntoParagraphs, matchMetricFont, METRIC_FONTS } from '@/store/app-store'
+import { useEffect, useRef, useCallback, useState, Fragment } from 'react'
+import { useAppStore, type PDFTextItem, groupTextItemsIntoLines, groupLinesIntoParagraphs, matchMetricFont, METRIC_FONTS } from '@/store/app-store'
 import * as pdfjsLib from 'pdfjs-dist'
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdf-worker/pdf.worker.min.mjs'
@@ -13,54 +13,9 @@ const CSS_FONT_MAP: Record<string, string> = {
 const FONT_LABELS: Record<string, string> = { Helvetica: 'Sans', TimesRoman: 'Serif', Courier: 'Mono' }
 
 // PDF.js returns a single visual line as many fragmented text items (font
-// changes, kerning and word-spacing each start a new run). Editing per fragment
-// is what made a line "break into chunks" when clicked. We merge every fragment
-// that grouping placed on the same line into ONE editable item, so a click
-// selects (and edits) the whole line. The merged item exposes the same fields
-// every consumer reads (geometry + font), so the store/export need no changes.
-function mergeLineItem(line: PDFTextLine, pageNumber: number, lineIndex: number): PDFTextItem {
-  const items = line.items // already sorted left-to-right by createTextLine()
-  // The widest run best represents the line's dominant font/metrics.
-  const dominant = items.reduce((a, b) => (b.width > a.width ? b : a), items[0])
-
-  // Re-join the fragments, inserting a space wherever there is a visible gap
-  // that the original glyph runs implied but did not encode as a character.
-  let text = ''
-  let prevEnd: number | null = null
-  for (const it of items) {
-    if (prevEnd !== null) {
-      const gap = it.x - prevEnd
-      const spaceWidth = it.fontSize * 0.25
-      if (gap > spaceWidth && !text.endsWith(' ') && !it.str.startsWith(' ')) {
-        text += ' '
-      }
-    }
-    text += it.str
-    prevEnd = it.x + it.width
-  }
-
-  const fontSize = dominant.fontSize
-  return {
-    id: `line-${pageNumber}-${lineIndex}`,
-    text,
-    str: text,
-    x: line.x,
-    y: line.y,
-    width: line.width,
-    height: line.height,
-    fontSize,
-    fontFamily: dominant.fontFamily,
-    pageNumber,
-    transform: dominant.transform,
-    hasEOL: true,
-    dir: dominant.dir,
-    widthInChars: fontSize > 0 ? Math.round(line.width / (fontSize * 0.52)) : text.length,
-    lineHeight: line.height * 1.2,
-    lineIndex,
-    paragraphIndex: line.paragraphIndex,
-  }
-}
-
+// changes, kerning and word-spacing each start a new run), which made a line
+// "break into chunks" when clicked. We stitch fragments that sit on the same
+// line with only a sub-space gap back into one editable run.
 function mergeCloseItems(items: PDFTextItem[]): PDFTextItem[] {
   if (items.length <= 1) return items
   

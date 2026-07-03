@@ -20,7 +20,7 @@ import {
   ArrowUpRight, Printer, Maximize2, Keyboard, FileDown, ImageIcon,
   XCircle, Pencil, EyeOff, PenLine, Stamp, Hand, Droplets, Crop,
   ImagePlus, Hash, Shield, FileOutput, Copy, Scissors, GripVertical,
-  MoveHorizontal, CheckCircle2, Loader2, Settings2, ScanText,
+  MoveHorizontal, CheckCircle2, Loader2, Settings2, ScanText, Sparkles,
 } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import * as pdfjsLib from 'pdfjs-dist'
@@ -29,6 +29,7 @@ import fontkit from '@pdf-lib/fontkit'
 import { TextLayer } from './text-layer'
 import { SignaturePad } from './signature-pad'
 import { PageManager } from './page-manager'
+import { AiChatPanel } from './ai-chat-panel'
 import { Slider } from '@/components/ui/slider'
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdf-worker/pdf.worker.min.mjs'
@@ -82,6 +83,7 @@ export function PdfEditor() {
     fontSize, setFontSize, fontFamily, setFontFamily,
     showSidebar, toggleSidebar,
     showAnnotationPanel, toggleAnnotationPanel,
+    showAiPanel, toggleAiPanel,
     isEditorLoading, setEditorLoading,
     isDrawing, setIsDrawing, currentDrawingPoints, setCurrentDrawingPoints,
     goBack, setView, undo, redo, canUndo, canRedo,
@@ -1771,6 +1773,15 @@ export function PdfEditor() {
           </DropdownMenuContent>
         </DropdownMenu>
 
+        {/* AI assistant toggle */}
+        <TooltipProvider delayDuration={300}>
+          <Tooltip><TooltipTrigger asChild>
+            <Button variant="ghost" size="icon" className={`shrink-0 ${showAiPanel ? 'bg-emerald-100 dark:bg-emerald-900/40 text-emerald-600' : ''}`} onClick={toggleAiPanel}>
+              <Sparkles className="w-4 h-4" />
+            </Button>
+          </TooltipTrigger><TooltipContent side="bottom" className="text-xs">AI Assistant — edit by chat</TooltipContent></Tooltip>
+        </TooltipProvider>
+
         {/* Annotation panel toggle */}
         <TooltipProvider delayDuration={300}>
           <Tooltip><TooltipTrigger asChild>
@@ -1806,6 +1817,9 @@ export function PdfEditor() {
         </div>
 
         <div className="flex items-center gap-0.5 shrink-0">
+          <Button variant="ghost" size="icon" className={`h-8 w-8 ${showAiPanel ? 'bg-emerald-100 dark:bg-emerald-900/40 text-emerald-600' : ''}`} onClick={toggleAiPanel}>
+            <Sparkles className="w-4 h-4" />
+          </Button>
           <Button variant="ghost" size="icon" className="h-8 w-8" disabled={!canUndo} onClick={undo}>
             <Undo2 className="w-4 h-4" />
           </Button>
@@ -2377,6 +2391,9 @@ export function PdfEditor() {
             </motion.div>
           )}
         </AnimatePresence>
+
+        {/* Right Panel - AI Assistant */}
+        <AiChatPanel />
       </div>
 
       {/* ===== MOBILE FORMATTING SUB-TOOLBAR ===== */}
