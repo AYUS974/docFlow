@@ -23,6 +23,8 @@ services:
       # HOSTNAME makes it unreachable -> 502).
       - key: HOSTNAME
         value: "0.0.0.0"
+      - key: PORT
+        value: "3000"
       # pdf-svc is a separate free web service -> reach it over its public URL.
       # IMPORTANT: if Render gives pdf-svc a different URL (name collision),
       # update this value in the dashboard after the first deploy.
