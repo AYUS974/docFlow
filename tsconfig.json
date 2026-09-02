@@ -10,13 +10,12 @@
     "skipLibCheck": true,
     "strict": true,
     "noEmit": true,
-    "noImplicitAny": false,
     "esModuleInterop": true,
     "module": "esnext",
     "moduleResolution": "bundler",
     "resolveJsonModule": true,
     "isolatedModules": true,
-    "jsx": "react-jsx",
+    "jsx": "preserve",
     "incremental": true,
     "plugins": [
       {
