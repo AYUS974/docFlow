@@ -74,22 +74,31 @@ export function Navbar() {
           </div>
 
           {/* Right section */}
-          <div className="hidden md:flex items-center gap-2">
+          <div className="hidden md:flex items-center gap-3">
             {mounted && (
               <Button
                 variant="ghost"
                 size="icon"
                 onClick={toggleTheme}
-                className="rounded-lg"
+                className="rounded-xl border border-border/50 hover:bg-muted/80 transition-colors"
                 aria-label="Toggle theme"
               >
                 {resolvedTheme === 'dark'
-                  ? <Sun className="w-4 h-4" />
-                  : <Moon className="w-4 h-4" />
+                  ? <Sun className="w-4 h-4 text-amber-400" />
+                  : <Moon className="w-4 h-4 text-emerald-600" />
                 }
               </Button>
             )}
-            {/* Sign-in hidden temporarily */}
+            <Button
+              size="sm"
+              onClick={() => {
+                login('Demo User', 'demo@docflow.io')
+                setView('dashboard')
+              }}
+              className="bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl px-4 shadow-sm shadow-emerald-600/20"
+            >
+              Open Dashboard
+            </Button>
           </div>
 
           {/* Mobile toggle */}
