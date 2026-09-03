@@ -7,4 +7,4 @@ Learning Git with the DocFlow project.
 I am learning Git branches using the DocFlow project.
 
 - A branch lets me work on changes separately from main.
-- DocFlow Theme: Enabled Sleek Dark Mode with neon accents.
+- DocFlow Theme: Supports both Sleek Dark Mode and Crisp Light Mode.
