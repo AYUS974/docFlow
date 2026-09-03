@@ -1,6 +1,8 @@
 # Git Practice
 
 Learning Git with the DocFlow project.
+- Main branch update: Added analytics tracking note.
+
 
 ## Branching Practice
 
