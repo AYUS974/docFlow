@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useEffect } from 'react'
 import { useAppStore, type PDFDocumentInfo } from '@/store/app-store'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -33,6 +33,7 @@ import {
   FileText as FileTextIcon,
   Loader2,
   Copy,
+  RefreshCw,
 } from 'lucide-react'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
@@ -47,6 +48,8 @@ export function Dashboard() {
   const [search, setSearch] = useState('')
   const [isDragOver, setIsDragOver] = useState(false)
   const [uploading, setUploading] = useState(false)
+  const [isLoadingDocs, setIsLoadingDocs] = useState(true)
+  const [loadingDocId, setLoadingDocId] = useState<string | null>(null)
   const [showMergeDialog, setShowMergeDialog] = useState(false)
   const [showSplitDialog, setShowSplitDialog] = useState(false)
   const [showCompressDialog, setShowCompressDialog] = useState(false)
@@ -62,6 +65,101 @@ export function Dashboard() {
   const [wmOpacity, setWmOpacity] = useState(0.15)
   const [wmAngle, setWmAngle] = useState(-45)
   const [convertFormat, setConvertFormat] = useState('txt')
+
+  // Fetch saved documents from server on mount
+  const fetchSavedDocuments = useCallback(async () => {
+    try {
+      setIsLoadingDocs(true)
+      const res = await fetch('/api/documents')
+      if (res.ok) {
+        const data = await res.json()
+        if (Array.isArray(data)) {
+          const loadedDocs: PDFDocumentInfo[] = data.map((d: any) => ({
+            id: d.id,
+            title: d.title || d.fileName?.replace(/\.pdf$/i, '') || 'Untitled Document',
+            fileName: d.fileName || 'document.pdf',
+            fileSize: d.fileSize || 0,
+            pageCount: d.pageCount || 1,
+            fileData: d.data ? (d.data.startsWith('data:') ? d.data : `data:application/pdf;base64,${d.data}`) : '',
+            uploadedAt: d.createdAt || new Date().toISOString(),
+          }))
+          setDocuments(loadedDocs)
+        }
+      }
+    } catch (err) {
+      console.error('Failed to load documents from server:', err)
+    } finally {
+      setIsLoadingDocs(false)
+    }
+  }, [setDocuments])
+
+  useEffect(() => {
+    fetchSavedDocuments()
+  }, [fetchSavedDocuments])
+
+  const handleOpenDocument = useCallback(async (doc: PDFDocumentInfo) => {
+    // If fileData is already in memory
+    if (doc.fileData && doc.fileData.length > 50) {
+      setCurrentDocument(doc)
+      setAnnotations([])
+      setView('editor')
+      return
+    }
+
+    // Otherwise fetch the full payload
+    setLoadingDocId(doc.id || '')
+    try {
+      const res = await fetch(`/api/documents/${doc.id}`)
+      if (res.ok) {
+        const fullDoc = await res.json()
+        const dataUrl = fullDoc.data?.startsWith('data:')
+          ? fullDoc.data
+          : `data:application/pdf;base64,${fullDoc.data}`
+
+        const fullDocInfo: PDFDocumentInfo = {
+          ...doc,
+          fileData: dataUrl,
+          pageCount: fullDoc.pageCount || doc.pageCount,
+        }
+
+        // Cache file data in store
+        setDocuments(documents.map((d) => (d.id === doc.id ? fullDocInfo : d)))
+
+        if (Array.isArray(fullDoc.annotations)) {
+          setAnnotations(fullDoc.annotations)
+        } else {
+          setAnnotations([])
+        }
+
+        setCurrentDocument(fullDocInfo)
+        setView('editor')
+      } else {
+        console.error('Failed to fetch full document payload')
+      }
+    } catch (err) {
+      console.error('Error opening document:', err)
+    } finally {
+      setLoadingDocId(null)
+    }
+  }, [documents, setDocuments, setCurrentDocument, setAnnotations, setView])
+
+  const getDocBase64 = useCallback(async (doc?: PDFDocumentInfo): Promise<string> => {
+    if (!doc) return ''
+    if (doc.fileData && doc.fileData.length > 50) {
+      return doc.fileData.split(',')[1] || ''
+    }
+    if (!doc.id) return ''
+    try {
+      const res = await fetch(`/api/documents/${doc.id}`)
+      if (res.ok) {
+        const fullDoc = await res.json()
+        return fullDoc.data?.replace(/^data:application\/pdf;base64,/, '') || ''
+      }
+    } catch (e) {
+      console.error('Failed to get doc payload:', e)
+    }
+    return ''
+  }, [])
 
   const filteredDocs = documents.filter((d) =>
     d.title.toLowerCase().includes(search.toLowerCase()) ||
@@ -101,7 +199,7 @@ export function Dashboard() {
 
       // Save to DB
       try {
-        await fetch('/api/documents', {
+        const saveRes = await fetch('/api/documents', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -112,8 +210,13 @@ export function Dashboard() {
             data: base64,
           }),
         })
+        if (saveRes.ok) {
+          const saved = await saveRes.json()
+          if (saved?.id) {
+            doc.id = saved.id
+          }
+        }
       } catch (e) {
-        // DB save is optional, we still have it in memory
         console.warn('Could not save to DB:', e)
       }
 
@@ -235,6 +338,16 @@ export function Dashboard() {
         </div>
         <div className="flex items-center gap-3">
           <Button
+            variant="ghost"
+            size="icon"
+            className="rounded-xl border border-border/60 hover:bg-muted"
+            onClick={fetchSavedDocuments}
+            disabled={isLoadingDocs}
+            title="Refresh documents"
+          >
+            <RefreshCw className={`w-4 h-4 ${isLoadingDocs ? 'animate-spin text-emerald-600' : ''}`} />
+          </Button>
+          <Button
             variant="outline"
             className="gap-2 rounded-xl"
             onClick={loadSamplePdf}
@@ -355,7 +468,19 @@ export function Dashboard() {
       )}
 
       {/* Documents Grid */}
-      {filteredDocs.length === 0 ? (
+      {isLoadingDocs ? (
+        <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4 py-6">
+          {[1, 2, 3].map((n) => (
+            <div key={n} className="rounded-2xl border border-border/60 overflow-hidden animate-pulse">
+              <div className="h-40 bg-muted/60" />
+              <div className="p-4 space-y-2">
+                <div className="h-4 bg-muted/80 rounded w-3/4" />
+                <div className="h-3 bg-muted/50 rounded w-1/2" />
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : filteredDocs.length === 0 ? (
         <motion.div
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
@@ -411,35 +536,37 @@ export function Dashboard() {
                   {/* PDF Preview */}
                   <div
                     className="h-40 bg-gradient-to-br from-muted to-muted/50 flex items-center justify-center relative"
-                    onClick={() => {
-                      setCurrentDocument(doc)
-                      setAnnotations([])
-                      setView('editor')
-                    }}
+                    onClick={() => handleOpenDocument(doc)}
                   >
-                    <FileText className="w-16 h-16 text-muted-foreground/20" />
-                    <Badge className="absolute top-3 right-3 bg-background/80 text-foreground border-border/50 text-xs">
-                      {doc.pageCount} {doc.pageCount === 1 ? 'page' : 'pages'}
-                    </Badge>
+                    {loadingDocId === doc.id ? (
+                      <div className="flex flex-col items-center gap-2">
+                        <Loader2 className="w-8 h-8 text-emerald-600 animate-spin" />
+                        <span className="text-xs text-muted-foreground font-medium">Opening...</span>
+                      </div>
+                    ) : (
+                      <>
+                        <FileText className="w-16 h-16 text-muted-foreground/20 group-hover:text-emerald-600/30 transition-colors" />
+                        <Badge className="absolute top-3 right-3 bg-background/80 text-foreground border-border/50 text-xs">
+                          {doc.pageCount} {doc.pageCount === 1 ? 'page' : 'pages'}
+                        </Badge>
+                      </>
+                    )}
                   </div>
                   <CardContent className="p-4">
                     <div className="flex items-start justify-between gap-2 mb-2">
                       <div
                         className="flex-1 min-w-0"
-                        onClick={() => {
-                          setCurrentDocument(doc)
-                          setAnnotations([])
-                          setView('editor')
-                        }}
+                        onClick={() => handleOpenDocument(doc)}
                       >
-                        <h3 className="font-semibold text-sm truncate">{doc.title}</h3>
+                        <h3 className="font-semibold text-sm truncate group-hover:text-emerald-600 transition-colors">{doc.title}</h3>
                         <p className="text-xs text-muted-foreground truncate">{doc.fileName}</p>
                       </div>
                       <Button
                         variant="ghost"
                         size="icon"
-                        className="h-8 w-8 shrink-0 opacity-0 group-hover:opacity-100"
+                        className="h-8 w-8 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity"
                         onClick={(e) => { e.stopPropagation(); handleDelete(doc.id!) }}
+                        title="Delete document"
                       >
                         <Trash2 className="w-4 h-4 text-destructive" />
                       </Button>
@@ -492,7 +619,7 @@ export function Dashboard() {
                   setIsProcessing(true)
                   try {
                     const selectedDocs = documents.filter(d => selectedForMerge.has(d.id!))
-                    const files = selectedDocs.map(d => (d.fileData?.split(',')[1] || ''))
+                    const files = (await Promise.all(selectedDocs.map(d => getDocBase64(d)))).filter(Boolean)
                     const res = await fetch('/api/pdf/merge', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ files }) })
                     const data = await res.json()
                     const a = document.createElement('a')
@@ -525,9 +652,8 @@ export function Dashboard() {
               <Button disabled={!splitRange.trim() || isProcessing} onClick={async () => {
                 setIsProcessing(true)
                 try {
-                  const doc = documents[0] // use most recent
-                  if (!doc?.fileData) return
-                  const base64 = doc.fileData.split(',')[1] || ''
+                  const base64 = await getDocBase64(documents[0])
+                  if (!base64) return
                   const res = await fetch('/api/pdf/split', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ data: base64, ranges: splitRange.split(';').map(s => s.trim()) }) })
                   const { files } = await res.json()
                   files.forEach((f: any, i: number) => { const a = document.createElement('a'); a.href = f.data; a.download = `split-${i + 1}.pdf`; a.click() })
@@ -565,9 +691,8 @@ export function Dashboard() {
               <Button disabled={isProcessing} onClick={async () => {
                 setIsProcessing(true); setProcessingResult(null)
                 try {
-                  const doc = documents[0]
-                  if (!doc?.fileData) return
-                  const base64 = doc.fileData.split(',')[1] || ''
+                  const base64 = await getDocBase64(documents[0])
+                  if (!base64) return
                   const res = await fetch('/api/pdf/compress', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ data: base64 }) })
                   setProcessingResult(await res.json())
                   // Auto download
@@ -619,9 +744,8 @@ export function Dashboard() {
               <Button disabled={isProcessing} onClick={async () => {
                 setIsProcessing(true); setProcessingResult(null)
                 try {
-                  const doc = documents[0]
-                  if (!doc?.fileData) return
-                  const base64 = doc.fileData.split(',')[1] || ''
+                  const base64 = await getDocBase64(documents[0])
+                  if (!base64) return
                   const res = await fetch('/api/pdf/extract-text', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ data: base64 }) })
                   setProcessingResult(await res.json())
                 } catch (err) { console.error(err) }
