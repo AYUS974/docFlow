@@ -29,7 +29,7 @@ export function Navbar() {
   const navItems = [
     { label: 'Features', view: 'landing' as const, icon: FileText },
     { label: 'Dashboard', view: 'dashboard' as const, icon: LayoutDashboard },
-    // { label: 'Pricing', view: 'pricing' as const, icon: CreditCard },
+    { label: 'Pricing', view: 'pricing' as const, icon: CreditCard },
   ]
 
   const toggleTheme = () => {
