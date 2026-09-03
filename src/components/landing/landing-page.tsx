@@ -5,6 +5,13 @@ import { useAppStore } from '@/store/app-store'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import { motion } from 'framer-motion'
 import {
   FileText,
@@ -25,6 +32,12 @@ import {
   FilePlus,
   Scissors,
   ShieldCheck,
+  Shield,
+  Lock,
+  Mail,
+  Layers,
+  Calendar,
+  ExternalLink,
 } from 'lucide-react'
 
 const fadeUp = {
@@ -354,6 +367,7 @@ const testimonials = [
 
 export function LandingPage() {
   const { setView, login } = useAppStore()
+  const [activeModal, setActiveModal] = useState<'roadmap' | 'privacy' | 'contact' | null>(null)
 
   return (
     <div className="min-h-screen relative overflow-hidden bg-background">
@@ -413,7 +427,7 @@ export function LandingPage() {
                 size="lg"
                 className="w-full sm:w-auto gap-2 px-8 h-12 text-base rounded-xl border-border/80 bg-background/60 backdrop-blur-sm hover:bg-muted/60 transition-all duration-200"
                 onClick={() => {
-                  const section = document.getElementById('features')
+                  const section = document.getElementById('how-it-works')
                   section?.scrollIntoView({ behavior: 'smooth' })
                 }}
               >
@@ -509,7 +523,7 @@ export function LandingPage() {
       </section>
 
       {/* How It Works */}
-      <section className="py-20 sm:py-28 bg-muted/20 relative">
+      <section id="how-it-works" className="py-20 sm:py-28 bg-muted/20 relative">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <motion.div
             className="text-center max-w-2xl mx-auto mb-16"
@@ -688,33 +702,91 @@ export function LandingPage() {
             <div>
               <h4 className="font-semibold mb-3 text-sm">Product</h4>
               <ul className="space-y-2">
-                {['Features', 'Changelog', 'Roadmap'].map((item) => (
-                  <li key={item}>
-                    <span className="text-sm text-muted-foreground">{item}</span>
-                  </li>
-                ))}
+                <li>
+                  <button
+                    onClick={() => {
+                      const el = document.getElementById('features')
+                      el?.scrollIntoView({ behavior: 'smooth' })
+                    }}
+                    className="text-sm text-muted-foreground hover:text-foreground transition-colors text-left"
+                  >
+                    Features
+                  </button>
+                </li>
+                <li>
+                  <button
+                    onClick={() => setView('pricing')}
+                    className="text-sm text-muted-foreground hover:text-foreground transition-colors text-left"
+                  >
+                    Pricing
+                  </button>
+                </li>
+                <li>
+                  <button
+                    onClick={() => setActiveModal('roadmap')}
+                    className="text-sm text-muted-foreground hover:text-foreground transition-colors text-left"
+                  >
+                    Changelog & Roadmap
+                  </button>
+                </li>
               </ul>
             </div>
             <div>
               <h4 className="font-semibold mb-3 text-sm">Company</h4>
               <ul className="space-y-2">
-                {['About', 'Blog', 'Careers', 'Contact'].map((item) => (
-                  <li key={item}>
-                    <span className="text-sm text-muted-foreground">{item}</span>
-                  </li>
-                ))}
+                <li>
+                  <button
+                    onClick={() => setActiveModal('contact')}
+                    className="text-sm text-muted-foreground hover:text-foreground transition-colors text-left"
+                  >
+                    About Us
+                  </button>
+                </li>
+                <li>
+                  <button
+                    onClick={() => setActiveModal('contact')}
+                    className="text-sm text-muted-foreground hover:text-foreground transition-colors text-left"
+                  >
+                    Contact & Support
+                  </button>
+                </li>
+                <li>
+                  <button
+                    onClick={() => setActiveModal('contact')}
+                    className="text-sm text-muted-foreground hover:text-foreground transition-colors text-left"
+                  >
+                    Careers
+                  </button>
+                </li>
               </ul>
             </div>
             <div>
-              <h4 className="font-semibold mb-3 text-sm">Legal</h4>
+              <h4 className="font-semibold mb-3 text-sm">Legal & Trust</h4>
               <ul className="space-y-2">
-                {['Privacy Policy', 'Terms of Service', 'Security', 'GDPR'].map(
-                  (item) => (
-                    <li key={item}>
-                      <span className="text-sm text-muted-foreground">{item}</span>
-                    </li>
-                  )
-                )}
+                <li>
+                  <button
+                    onClick={() => setActiveModal('privacy')}
+                    className="text-sm text-muted-foreground hover:text-foreground transition-colors text-left"
+                  >
+                    Privacy Policy
+                  </button>
+                </li>
+                <li>
+                  <button
+                    onClick={() => setActiveModal('privacy')}
+                    className="text-sm text-muted-foreground hover:text-foreground transition-colors text-left"
+                  >
+                    Terms of Service
+                  </button>
+                </li>
+                <li>
+                  <button
+                    onClick={() => setActiveModal('privacy')}
+                    className="text-sm text-muted-foreground hover:text-foreground transition-colors text-left"
+                  >
+                    Security & GDPR
+                  </button>
+                </li>
               </ul>
             </div>
           </div>
@@ -734,11 +806,129 @@ export function LandingPage() {
             </a>
 
             <p className="text-sm text-muted-foreground">
-              &copy; 2026 DocFlow. All rights reserved.
+              &copy; 2026 DocFlow &middot; An AYUS Labs Creation. All rights reserved.
             </p>
           </div>
         </div>
       </footer>
+
+      {/* Roadmap & Changelog Modal */}
+      <Dialog open={activeModal === 'roadmap'} onOpenChange={(open) => !open && setActiveModal(null)}>
+        <DialogContent className="sm:max-w-lg max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <div className="w-10 h-10 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center mb-2">
+              <Calendar className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
+            </div>
+            <DialogTitle>Product Changelog & Roadmap</DialogTitle>
+            <DialogDescription>
+              Explore what is new in DocFlow and what we are building next.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-6 pt-2">
+            <div>
+              <div className="flex items-center gap-2 mb-2">
+                <Badge className="bg-emerald-600 text-white">v2.4 (Current Release)</Badge>
+                <span className="text-xs text-muted-foreground">September 2026</span>
+              </div>
+              <ul className="space-y-1.5 text-sm text-muted-foreground">
+                <li className="flex items-center gap-2"><Check className="w-4 h-4 text-emerald-600 shrink-0" /> In-Place Native PDF Text Editing & Font Matching</li>
+                <li className="flex items-center gap-2"><Check className="w-4 h-4 text-emerald-600 shrink-0" /> AI Document Assistant with contextual document search</li>
+                <li className="flex items-center gap-2"><Check className="w-4 h-4 text-emerald-600 shrink-0" /> Workspace-scoped persistent file storage</li>
+                <li className="flex items-center gap-2"><Check className="w-4 h-4 text-emerald-600 shrink-0" /> Multi-file PDF Merge, Split, Compress & Extract tools</li>
+              </ul>
+            </div>
+
+            <div className="border-t border-border pt-4">
+              <div className="flex items-center gap-2 mb-2">
+                <Badge variant="outline" className="border-blue-500/40 text-blue-600 dark:text-blue-400 bg-blue-500/5">Q4 2026 (Upcoming)</Badge>
+              </div>
+              <ul className="space-y-1.5 text-sm text-muted-foreground">
+                <li className="flex items-center gap-2"><Layers className="w-4 h-4 text-blue-500 shrink-0" /> Real-time multi-user live collaborative annotations</li>
+                <li className="flex items-center gap-2"><Zap className="w-4 h-4 text-blue-500 shrink-0" /> OCR Multi-language text extraction & scanned PDF search</li>
+                <li className="flex items-center gap-2"><Globe className="w-4 h-4 text-blue-500 shrink-0" /> Direct cloud integration (Google Drive, OneDrive, Dropbox)</li>
+              </ul>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Privacy & Security Modal */}
+      <Dialog open={activeModal === 'privacy'} onOpenChange={(open) => !open && setActiveModal(null)}>
+        <DialogContent className="sm:max-w-lg max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <div className="w-10 h-10 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center mb-2">
+              <ShieldCheck className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
+            </div>
+            <DialogTitle>Privacy, Security & GDPR Compliance</DialogTitle>
+            <DialogDescription>
+              Your document privacy is our highest priority.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 pt-2 text-sm text-muted-foreground leading-relaxed">
+            <div className="p-3.5 rounded-xl bg-muted/40 border border-border/60">
+              <h4 className="font-semibold text-foreground text-sm flex items-center gap-2 mb-1">
+                <Lock className="w-4 h-4 text-emerald-600" /> Client-Side Processing
+              </h4>
+              <p className="text-xs">
+                DocFlow renders and processes document annotations directly in your web browser via WebAssembly and Canvas. Your raw documents are not shared with third parties.
+              </p>
+            </div>
+
+            <div className="p-3.5 rounded-xl bg-muted/40 border border-border/60">
+              <h4 className="font-semibold text-foreground text-sm flex items-center gap-2 mb-1">
+                <Shield className="w-4 h-4 text-emerald-600" /> Workspace Isolation & Encryption
+              </h4>
+              <p className="text-xs">
+                Each workspace session is strictly isolated using secure HTTP cookies and encrypted at rest using AES-256 and in transit via TLS 1.3.
+              </p>
+            </div>
+
+            <div className="p-3.5 rounded-xl bg-muted/40 border border-border/60">
+              <h4 className="font-semibold text-foreground text-sm flex items-center gap-2 mb-1">
+                <Check className="w-4 h-4 text-emerald-600" /> GDPR & SOC 2 Standards
+              </h4>
+              <p className="text-xs">
+                You maintain 100% ownership of all uploaded and edited files. You can delete your documents and workspace data permanently at any time.
+              </p>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Contact & Support Modal */}
+      <Dialog open={activeModal === 'contact'} onOpenChange={(open) => !open && setActiveModal(null)}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <div className="w-10 h-10 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center mb-2">
+              <Mail className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
+            </div>
+            <DialogTitle>Contact & AYUS Labs</DialogTitle>
+            <DialogDescription>
+              We are here to help with questions, enterprise plans, or feature requests.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 pt-2 text-sm">
+            <div className="p-4 rounded-xl bg-muted/30 border border-border/60 space-y-2">
+              <div className="font-medium text-foreground">DocFlow Support Team</div>
+              <p className="text-xs text-muted-foreground">
+                Email: <span className="font-mono text-emerald-600 select-all">support@docflow.io</span>
+              </p>
+              <p className="text-xs text-muted-foreground">
+                Organization: <span className="font-medium text-foreground">AYUS Labs</span>
+              </p>
+            </div>
+            <a
+              href="https://www.ayuslabs.com"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-medium transition-colors"
+            >
+              <span>Visit AYUS Labs Official Site</span>
+              <ExternalLink className="w-4 h-4" />
+            </a>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }
