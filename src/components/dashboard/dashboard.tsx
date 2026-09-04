@@ -41,10 +41,11 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 
 export function Dashboard() {
   const {
-    documents, setDocuments, addDocument, removeDocument,
+    documents: rawDocs, setDocuments, addDocument, removeDocument,
     setCurrentDocument, setView, setAnnotations,
     isLoggedIn, login,
   } = useAppStore()
+  const documents = Array.isArray(rawDocs) ? rawDocs : []
   const [search, setSearch] = useState('')
   const [isDragOver, setIsDragOver] = useState(false)
   const [uploading, setUploading] = useState(false)
@@ -162,8 +163,8 @@ export function Dashboard() {
   }, [])
 
   const filteredDocs = documents.filter((d) =>
-    d.title.toLowerCase().includes(search.toLowerCase()) ||
-    d.fileName.toLowerCase().includes(search.toLowerCase())
+    (d?.title || '').toLowerCase().includes(search.toLowerCase()) ||
+    (d?.fileName || '').toLowerCase().includes(search.toLowerCase())
   )
 
   const processFile = useCallback(async (file: File) => {
@@ -432,7 +433,7 @@ export function Dashboard() {
           </div>
           <div className="flex items-center gap-1.5">
             <HardDrive className="w-4 h-4" />
-            <span>{formatSize(documents.reduce((acc, d) => acc + d.fileSize, 0))}</span>
+            <span>{formatSize(documents.reduce((acc, d) => acc + (d?.fileSize || 0), 0))}</span>
           </div>
         </div>
       </motion.div>
@@ -649,10 +650,10 @@ export function Dashboard() {
             </div>
             <div className="flex justify-end gap-2">
               <Button variant="outline" onClick={() => setShowSplitDialog(false)}>Cancel</Button>
-              <Button disabled={!splitRange.trim() || isProcessing} onClick={async () => {
+              <Button disabled={!splitRange.trim() || isProcessing || documents.length === 0} onClick={async () => {
                 setIsProcessing(true)
                 try {
-                  const base64 = await getDocBase64(documents[0])
+                  const base64 = documents[0] ? await getDocBase64(documents[0]) : ''
                   if (!base64) return
                   const res = await fetch('/api/pdf/split', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ data: base64, ranges: splitRange.split(';').map(s => s.trim()) }) })
                   const { files } = await res.json()
@@ -688,10 +689,10 @@ export function Dashboard() {
             )}
             <div className="flex justify-end gap-2">
               <Button variant="outline" onClick={() => { setShowCompressDialog(false); setProcessingResult(null) }}>Cancel</Button>
-              <Button disabled={isProcessing} onClick={async () => {
+              <Button disabled={isProcessing || documents.length === 0} onClick={async () => {
                 setIsProcessing(true); setProcessingResult(null)
                 try {
-                  const base64 = await getDocBase64(documents[0])
+                  const base64 = documents[0] ? await getDocBase64(documents[0]) : ''
                   if (!base64) return
                   const res = await fetch('/api/pdf/compress', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ data: base64 }) })
                   setProcessingResult(await res.json())
@@ -741,10 +742,10 @@ export function Dashboard() {
             )}
             <div className="flex justify-end gap-2">
               <Button variant="outline" onClick={() => { setShowExtractDialog(false); setProcessingResult(null) }}>Close</Button>
-              <Button disabled={isProcessing} onClick={async () => {
+              <Button disabled={isProcessing || documents.length === 0} onClick={async () => {
                 setIsProcessing(true); setProcessingResult(null)
                 try {
-                  const base64 = await getDocBase64(documents[0])
+                  const base64 = documents[0] ? await getDocBase64(documents[0]) : ''
                   if (!base64) return
                   const res = await fetch('/api/pdf/extract-text', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ data: base64 }) })
                   setProcessingResult(await res.json())

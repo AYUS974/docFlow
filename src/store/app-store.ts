@@ -420,13 +420,13 @@ export const useAppStore = create<AppState>()(
 
   // Document
   documents: [],
-  setDocuments: (docs) => set({ documents: docs }),
-  addDocument: (doc) => set((state) => ({ documents: [doc, ...state.documents] })),
+  setDocuments: (docs) => set({ documents: Array.isArray(docs) ? docs : [] }),
+  addDocument: (doc) => set((state) => ({ documents: [doc, ...(state.documents || [])] })),
   removeDocument: (id) => set((state) => ({
-    documents: state.documents.filter((d) => d.id !== id)
+    documents: (state.documents || []).filter((d) => d.id !== id)
   })),
   updateDocument: (id, updates) => set((state) => ({
-    documents: state.documents.map((d) =>
+    documents: (state.documents || []).map((d) =>
       d.id === id ? { ...d, ...updates } : d
     ),
     currentDocument: state.currentDocument?.id === id
@@ -832,13 +832,16 @@ export const useAppStore = create<AppState>()(
   // textEdits, …). Strip those on load so stale text annotations don't render
   // against a document that isn't loaded — keep only the lightweight prefs.
   migrate: (persisted: any) => {
-    if (!persisted || typeof persisted !== 'object') return persisted
+    if (!persisted || typeof persisted !== 'object') return { documents: [] }
     const {
       documents, currentDocument, annotations, textEdits, pageRotations,
       pageOrder, savedSignatures, currentView, currentPage,
       ...uiPrefs
     } = persisted
-    return uiPrefs
+    return {
+      ...uiPrefs,
+      documents: [],
+    }
   },
   partialize: (state) => ({
     drawColor: state.drawColor,
