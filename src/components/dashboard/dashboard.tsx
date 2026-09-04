@@ -14,6 +14,13 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '@/components/ui/dialog'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   Upload,
@@ -34,6 +41,8 @@ import {
   Loader2,
   Copy,
   RefreshCw,
+  MoreVertical,
+  Check,
 } from 'lucide-react'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
@@ -59,6 +68,9 @@ export function Dashboard() {
   const [showPageNumDialog, setShowPageNumDialog] = useState(false)
   const [showConvertDialog, setShowConvertDialog] = useState(false)
   const [selectedForMerge, setSelectedForMerge] = useState<Set<string>>(new Set())
+  const [selectedExtractDocId, setSelectedExtractDocId] = useState<string | null>(null)
+  const [selectedCompressDocId, setSelectedCompressDocId] = useState<string | null>(null)
+  const [selectedSplitDocId, setSelectedSplitDocId] = useState<string | null>(null)
   const [splitRange, setSplitRange] = useState('')
   const [processingResult, setProcessingResult] = useState<any>(null)
   const [isProcessing, setIsProcessing] = useState(false)
@@ -442,9 +454,9 @@ export function Dashboard() {
       <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.15 }} className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
         {[
           { icon: FilePlus, label: 'Merge PDFs', desc: 'Combine multiple files', action: () => { setSelectedForMerge(new Set()); setShowMergeDialog(true) }, color: 'bg-blue-50 dark:bg-blue-900/20 text-blue-600' },
-          { icon: Scissors, label: 'Split PDF', desc: 'Extract page ranges', action: () => setShowSplitDialog(true), color: 'bg-amber-50 dark:bg-amber-900/20 text-amber-600' },
-          { icon: FileDown, label: 'Compress', desc: 'Reduce file size', action: () => setShowCompressDialog(true), color: 'bg-emerald-50 dark:bg-emerald-900/20 text-emerald-600' },
-          { icon: FileTextIcon, label: 'Extract Text', desc: 'Copy text from PDF', action: () => setShowExtractDialog(true), color: 'bg-purple-50 dark:bg-purple-900/20 text-purple-600' },
+          { icon: Scissors, label: 'Split PDF', desc: 'Extract page ranges', action: () => { if (!selectedSplitDocId && documents.length > 0) setSelectedSplitDocId(documents[0].id!); setShowSplitDialog(true) }, color: 'bg-amber-50 dark:bg-amber-900/20 text-amber-600' },
+          { icon: FileDown, label: 'Compress', desc: 'Reduce file size', action: () => { if (!selectedCompressDocId && documents.length > 0) setSelectedCompressDocId(documents[0].id!); setProcessingResult(null); setShowCompressDialog(true) }, color: 'bg-emerald-50 dark:bg-emerald-900/20 text-emerald-600' },
+          { icon: FileTextIcon, label: 'Extract Text', desc: 'Copy text from PDF', action: () => { if (!selectedExtractDocId && documents.length > 0) setSelectedExtractDocId(documents[0].id!); setProcessingResult(null); setShowExtractDialog(true) }, color: 'bg-purple-50 dark:bg-purple-900/20 text-purple-600' },
         ].map((tool) => (
           <button key={tool.label} onClick={tool.action} className="flex items-center gap-3 p-3 rounded-xl border border-border/60 hover:shadow-md hover:-translate-y-0.5 transition-all text-left bg-background">
             <div className={`w-10 h-10 rounded-lg ${tool.color} flex items-center justify-center shrink-0`}>
@@ -562,15 +574,41 @@ export function Dashboard() {
                         <h3 className="font-semibold text-sm truncate group-hover:text-emerald-600 transition-colors">{doc.title}</h3>
                         <p className="text-xs text-muted-foreground truncate">{doc.fileName}</p>
                       </div>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-8 w-8 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity"
-                        onClick={(e) => { e.stopPropagation(); handleDelete(doc.id!) }}
-                        title="Delete document"
-                      >
-                        <Trash2 className="w-4 h-4 text-destructive" />
-                      </Button>
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild onClick={(e) => e.stopPropagation()}>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8 shrink-0 opacity-70 group-hover:opacity-100 hover:bg-muted rounded-lg"
+                            title="Document actions"
+                          >
+                            <MoreVertical className="w-4 h-4" />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end" className="w-48">
+                          <DropdownMenuItem onClick={() => handleOpenDocument(doc)} className="gap-2 cursor-pointer">
+                            <FileText className="w-4 h-4 text-emerald-600" />
+                            Open in Editor
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => { setSelectedExtractDocId(doc.id!); setProcessingResult(null); setShowExtractDialog(true) }} className="gap-2 cursor-pointer">
+                            <FileTextIcon className="w-4 h-4 text-purple-600" />
+                            Extract Text
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => { setSelectedCompressDocId(doc.id!); setProcessingResult(null); setShowCompressDialog(true) }} className="gap-2 cursor-pointer">
+                            <FileDown className="w-4 h-4 text-emerald-600" />
+                            Compress PDF
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => { setSelectedSplitDocId(doc.id!); setShowSplitDialog(true) }} className="gap-2 cursor-pointer">
+                            <Scissors className="w-4 h-4 text-amber-600" />
+                            Split PDF
+                          </DropdownMenuItem>
+                          <DropdownMenuSeparator />
+                          <DropdownMenuItem onClick={() => handleDelete(doc.id!)} className="gap-2 text-destructive focus:text-destructive cursor-pointer">
+                            <Trash2 className="w-4 h-4" />
+                            Delete Document
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
                     </div>
                     <div className="flex items-center gap-3 text-xs text-muted-foreground">
                       <span>{formatSize(doc.fileSize)}</span>
@@ -640,34 +678,90 @@ export function Dashboard() {
 
       {/* Split Dialog */}
       <Dialog open={showSplitDialog} onOpenChange={setShowSplitDialog}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader><DialogTitle>Split PDF</DialogTitle><DialogDescription>Enter page ranges to extract.</DialogDescription></DialogHeader>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader><DialogTitle>Split PDF</DialogTitle><DialogDescription>Select a document and enter page ranges to extract.</DialogDescription></DialogHeader>
           <div className="space-y-4">
             <div>
-              <label className="text-sm font-medium mb-1.5 block">Select a document first from the grid, then enter ranges</label>
-              <input type="text" value={splitRange} onChange={(e) => setSplitRange(e.target.value)} placeholder="e.g. 1-3, 5, 7-end" className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
-              <p className="text-xs text-muted-foreground mt-1">Comma-separated ranges. Use &quot;end&quot; for the last page.</p>
+              <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 block">Choose Document ({documents.length})</label>
+              <div className="max-h-48 overflow-y-auto space-y-1.5 pr-1">
+                {documents.length === 0 ? (
+                  <p className="text-sm text-muted-foreground text-center py-4">No documents available. Upload some PDFs first.</p>
+                ) : documents.map((doc) => {
+                  const isSelected = (selectedSplitDocId || documents[0]?.id) === doc.id
+                  return (
+                    <div
+                      key={doc.id}
+                      onClick={() => setSelectedSplitDocId(doc.id!)}
+                      className={`flex items-center gap-3 p-2.5 rounded-xl border cursor-pointer transition-all ${
+                        isSelected
+                          ? 'border-emerald-500 bg-emerald-50 dark:bg-emerald-900/20 shadow-sm'
+                          : 'border-border/60 hover:bg-muted/50 hover:border-border'
+                      }`}
+                    >
+                      <div className={`w-5 h-5 rounded-full border flex items-center justify-center shrink-0 ${isSelected ? 'border-emerald-600 bg-emerald-600 text-white' : 'border-muted-foreground/40'}`}>
+                        {isSelected && <Check className="w-3 h-3" />}
+                      </div>
+                      <FileText className={`w-4 h-4 shrink-0 ${isSelected ? 'text-emerald-600' : 'text-muted-foreground'}`} />
+                      <div className="min-w-0 flex-1">
+                        <div className="text-sm font-medium truncate">{doc.title}</div>
+                        <div className="text-xs text-muted-foreground">{doc.pageCount} {doc.pageCount === 1 ? 'page' : 'pages'} &middot; {formatSize(doc.fileSize)}</div>
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
             </div>
-            <div className="flex justify-end gap-2">
+
+            <div>
+              <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1.5 block">
+                Page Ranges to Extract
+              </label>
+              <input
+                type="text"
+                value={splitRange}
+                onChange={(e) => setSplitRange(e.target.value)}
+                placeholder="e.g. 1-2, 3-end or 1, 3, 5"
+                className="w-full px-3.5 py-2.5 border border-border rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 bg-background"
+              />
+              <p className="text-xs text-muted-foreground mt-1.5">
+                Comma-separated page numbers or ranges. Use &quot;end&quot; for the last page.
+              </p>
+            </div>
+
+            <div className="flex justify-end gap-2 pt-2">
               <Button variant="outline" onClick={() => setShowSplitDialog(false)}>Cancel</Button>
-              <Button disabled={!splitRange.trim() || isProcessing || documents.length === 0} onClick={async () => {
-                setIsProcessing(true)
-                try {
-                  const base64 = documents[0] ? await getDocBase64(documents[0]) : ''
-                  if (!base64) return
-                  const res = await fetch('/api/pdf/split', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ data: base64, ranges: splitRange.split(';').map(s => s.trim()) }) })
-                  if (res.ok) {
-                    const { files } = await res.json()
-                    if (Array.isArray(files)) {
-                      files.forEach((f: any, i: number) => { const a = document.createElement('a'); a.href = f.data; a.download = `split-${i + 1}.pdf`; a.click() })
-                      setShowSplitDialog(false)
+              <Button
+                disabled={!splitRange.trim() || isProcessing || documents.length === 0}
+                onClick={async () => {
+                  setIsProcessing(true)
+                  try {
+                    const targetDoc = documents.find(d => d.id === selectedSplitDocId) || documents[0]
+                    const base64 = targetDoc ? await getDocBase64(targetDoc) : ''
+                    if (!base64) return
+                    const res = await fetch('/api/pdf/split', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ data: base64, ranges: splitRange.split(';').map(s => s.trim()) })
+                    })
+                    if (res.ok) {
+                      const { files } = await res.json()
+                      if (Array.isArray(files)) {
+                        files.forEach((f: any, i: number) => {
+                          const a = document.createElement('a')
+                          a.href = f.data
+                          a.download = `${targetDoc?.title || 'split'}-part-${i + 1}.pdf`
+                          a.click()
+                        })
+                        setShowSplitDialog(false)
+                      }
                     }
-                  }
-                } catch (err) { console.error(err) }
-                finally { setIsProcessing(false) }
-              }} className="bg-emerald-600 hover:bg-emerald-700 text-white gap-2">
+                  } catch (err) { console.error(err) }
+                  finally { setIsProcessing(false) }
+                }}
+                className="bg-emerald-600 hover:bg-emerald-700 text-white gap-2"
+              >
                 {isProcessing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Scissors className="w-4 h-4" />}
-                Split
+                Split PDF
               </Button>
             </div>
           </div>
@@ -676,13 +770,44 @@ export function Dashboard() {
 
       {/* Compress Dialog */}
       <Dialog open={showCompressDialog} onOpenChange={setShowCompressDialog}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader><DialogTitle>Compress PDF</DialogTitle><DialogDescription>Reduce file size while preserving quality.</DialogDescription></DialogHeader>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader><DialogTitle>Compress PDF</DialogTitle><DialogDescription>Select any document to reduce its file size.</DialogDescription></DialogHeader>
           <div className="space-y-4">
+            <div>
+              <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 block">Choose Document ({documents.length})</label>
+              <div className="max-h-48 overflow-y-auto space-y-1.5 pr-1">
+                {documents.length === 0 ? (
+                  <p className="text-sm text-muted-foreground text-center py-4">No documents available. Upload some PDFs first.</p>
+                ) : documents.map((doc) => {
+                  const isSelected = (selectedCompressDocId || documents[0]?.id) === doc.id
+                  return (
+                    <div
+                      key={doc.id}
+                      onClick={() => { setSelectedCompressDocId(doc.id!); setProcessingResult(null) }}
+                      className={`flex items-center gap-3 p-2.5 rounded-xl border cursor-pointer transition-all ${
+                        isSelected
+                          ? 'border-emerald-500 bg-emerald-50 dark:bg-emerald-900/20 shadow-sm'
+                          : 'border-border/60 hover:bg-muted/50 hover:border-border'
+                      }`}
+                    >
+                      <div className={`w-5 h-5 rounded-full border flex items-center justify-center shrink-0 ${isSelected ? 'border-emerald-600 bg-emerald-600 text-white' : 'border-muted-foreground/40'}`}>
+                        {isSelected && <Check className="w-3 h-3" />}
+                      </div>
+                      <FileText className={`w-4 h-4 shrink-0 ${isSelected ? 'text-emerald-600' : 'text-muted-foreground'}`} />
+                      <div className="min-w-0 flex-1">
+                        <div className="text-sm font-medium truncate">{doc.title}</div>
+                        <div className="text-xs text-muted-foreground">{doc.pageCount} {doc.pageCount === 1 ? 'page' : 'pages'} &middot; {formatSize(doc.fileSize)}</div>
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+
             {processingResult?.reduction !== undefined ? (
-              <div className="text-center p-4 rounded-xl bg-muted/50">
+              <div className="text-center p-4 rounded-xl bg-muted/50 border border-border/60">
                 <div className="text-3xl font-bold text-emerald-600">-{processingResult.reduction}%</div>
-                <div className="text-sm text-muted-foreground mt-1">Size reduced</div>
+                <div className="text-sm text-muted-foreground mt-1">Size reduced successfully</div>
                 <div className="flex justify-center gap-6 mt-3 text-xs">
                   <div><span className="text-muted-foreground">Original: </span><span className="font-medium">{((processingResult.originalSize || 0) / 1024).toFixed(1)} KB</span></div>
                   <div><span className="text-muted-foreground">Compressed: </span><span className="font-medium text-emerald-600">{((processingResult.compressedSize || 0) / 1024).toFixed(1)} KB</span></div>
@@ -690,28 +815,39 @@ export function Dashboard() {
               </div>
             ) : processingResult?.error ? (
               <div className="text-center p-4 text-sm text-destructive bg-destructive/10 rounded-xl">{processingResult.error}</div>
-            ) : (
-              <p className="text-sm text-muted-foreground text-center py-4">Select the most recent document to compress.</p>
-            )}
-            <div className="flex justify-end gap-2">
+            ) : null}
+
+            <div className="flex justify-end gap-2 pt-2">
               <Button variant="outline" onClick={() => { setShowCompressDialog(false); setProcessingResult(null) }}>Cancel</Button>
-              <Button disabled={isProcessing || documents.length === 0} onClick={async () => {
-                setIsProcessing(true); setProcessingResult(null)
-                try {
-                  const base64 = documents[0] ? await getDocBase64(documents[0]) : ''
-                  if (!base64) return
-                  const res = await fetch('/api/pdf/compress', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ data: base64 }) })
-                  const result = await res.json()
-                  setProcessingResult(result)
-                  if (result?.data) {
-                    const a = document.createElement('a')
-                    a.href = result.data; a.download = 'compressed.pdf'; a.click()
-                  }
-                } catch (err) { console.error(err) }
-                finally { setIsProcessing(false) }
-              }} className="bg-emerald-600 hover:bg-emerald-700 text-white gap-2">
+              <Button
+                disabled={isProcessing || documents.length === 0}
+                onClick={async () => {
+                  setIsProcessing(true)
+                  setProcessingResult(null)
+                  try {
+                    const targetDoc = documents.find(d => d.id === selectedCompressDocId) || documents[0]
+                    const base64 = targetDoc ? await getDocBase64(targetDoc) : ''
+                    if (!base64) return
+                    const res = await fetch('/api/pdf/compress', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ data: base64 })
+                    })
+                    const result = await res.json()
+                    setProcessingResult(result)
+                    if (result?.data) {
+                      const a = document.createElement('a')
+                      a.href = result.data
+                      a.download = `${targetDoc?.title || 'document'}-compressed.pdf`
+                      a.click()
+                    }
+                  } catch (err) { console.error(err) }
+                  finally { setIsProcessing(false) }
+                }}
+                className="bg-emerald-600 hover:bg-emerald-700 text-white gap-2"
+              >
                 {isProcessing ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileDown className="w-4 h-4" />}
-                Compress
+                Compress Selected PDF
               </Button>
             </div>
           </div>
@@ -720,51 +856,116 @@ export function Dashboard() {
 
       {/* Extract Text Dialog */}
       <Dialog open={showExtractDialog} onOpenChange={setShowExtractDialog}>
-        <DialogContent className="sm:max-w-lg max-h-[80vh]">
-          <DialogHeader><DialogTitle>Extract Text</DialogTitle><DialogDescription>Copy text content from your PDF.</DialogDescription></DialogHeader>
+        <DialogContent className="sm:max-w-2xl max-h-[85vh]">
+          <DialogHeader>
+            <DialogTitle>Extract Text</DialogTitle>
+            <DialogDescription>Select any PDF document to extract and copy its text content.</DialogDescription>
+          </DialogHeader>
           <div className="space-y-4">
+            {/* Document Picker */}
+            <div>
+              <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 block">
+                Choose Document ({documents.length})
+              </label>
+              <div className="max-h-44 overflow-y-auto space-y-1.5 pr-1">
+                {documents.length === 0 ? (
+                  <p className="text-sm text-muted-foreground text-center py-4">No documents available. Upload some PDFs first.</p>
+                ) : documents.map((doc) => {
+                  const isSelected = (selectedExtractDocId || documents[0]?.id) === doc.id
+                  return (
+                    <div
+                      key={doc.id}
+                      onClick={() => { setSelectedExtractDocId(doc.id!); setProcessingResult(null) }}
+                      className={`flex items-center gap-3 p-2.5 rounded-xl border cursor-pointer transition-all ${
+                        isSelected
+                          ? 'border-emerald-500 bg-emerald-50 dark:bg-emerald-900/20 shadow-sm'
+                          : 'border-border/60 hover:bg-muted/50 hover:border-border'
+                      }`}
+                    >
+                      <div className={`w-5 h-5 rounded-full border flex items-center justify-center shrink-0 ${isSelected ? 'border-emerald-600 bg-emerald-600 text-white' : 'border-muted-foreground/40'}`}>
+                        {isSelected && <Check className="w-3 h-3" />}
+                      </div>
+                      <FileText className={`w-4 h-4 shrink-0 ${isSelected ? 'text-emerald-600' : 'text-muted-foreground'}`} />
+                      <div className="min-w-0 flex-1">
+                        <div className="text-sm font-medium truncate">{doc.title}</div>
+                        <div className="text-xs text-muted-foreground">{doc.pageCount} {doc.pageCount === 1 ? 'page' : 'pages'} &middot; {formatSize(doc.fileSize)}</div>
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+
+            {/* Results Area */}
             {isProcessing ? (
-              <div className="flex items-center justify-center py-8"><Loader2 className="w-6 h-6 animate-spin text-emerald-600" /></div>
+              <div className="flex flex-col items-center justify-center py-10 gap-3 border rounded-2xl bg-muted/20">
+                <Loader2 className="w-8 h-8 animate-spin text-emerald-600" />
+                <span className="text-sm text-muted-foreground font-medium">Extracting text from PDF...</span>
+              </div>
             ) : processingResult?.pages && Array.isArray(processingResult.pages) ? (
-              <div>
-                <div className="text-xs text-muted-foreground mb-2">{(processingResult.totalChars || 0)} characters extracted across {processingResult.pages.length} pages</div>
-                <ScrollArea className="h-64 rounded-lg border">
-                  <div className="p-3 space-y-3">
+              <div className="space-y-3">
+                <div className="flex items-center justify-between text-xs text-muted-foreground bg-muted/40 px-3 py-2 rounded-lg border">
+                  <span>{(processingResult.totalChars || 0)} characters extracted across {processingResult.pages.length} pages</span>
+                  <span className="font-medium text-foreground truncate max-w-[200px]">{documents.find(d => d.id === selectedExtractDocId)?.title || documents[0]?.title}</span>
+                </div>
+                <ScrollArea className="h-60 rounded-xl border bg-background p-3">
+                  <div className="space-y-4">
                     {processingResult.pages.map((p: any) => (
-                      <div key={p.pageNumber}>
-                        <div className="text-xs font-semibold text-muted-foreground mb-1">Page {p.pageNumber}</div>
-                        <p className="text-sm whitespace-pre-wrap">{p.text || '(no text content)'}</p>
+                      <div key={p.pageNumber} className="border-b border-border/40 pb-3 last:border-0 last:pb-0">
+                        <div className="text-xs font-semibold text-emerald-600 dark:text-emerald-400 mb-1">Page {p.pageNumber}</div>
+                        <p className="text-sm whitespace-pre-wrap leading-relaxed">{p.text || '(no text content on this page)'}</p>
                       </div>
                     ))}
                   </div>
                 </ScrollArea>
-                <Button variant="outline" className="mt-2 w-full gap-2" onClick={() => {
-                  const text = (processingResult.pages || []).map((p: any) => `--- Page ${p.pageNumber} ---\n${p.text}`).join('\n\n')
-                  navigator.clipboard.writeText(text)
-                }}>
-                  <Copy className="w-4 h-4" /> Copy All Text
-                </Button>
+                <div className="flex gap-2">
+                  <Button
+                    variant="outline"
+                    className="flex-1 gap-2"
+                    onClick={() => {
+                      const text = (processingResult.pages || []).map((p: any) => `--- Page ${p.pageNumber} ---\n${p.text}`).join('\n\n')
+                      navigator.clipboard.writeText(text)
+                    }}
+                  >
+                    <Copy className="w-4 h-4" /> Copy All Text
+                  </Button>
+                  <Button
+                    variant="outline"
+                    onClick={() => setProcessingResult(null)}
+                  >
+                    Clear Results
+                  </Button>
+                </div>
               </div>
             ) : processingResult?.error ? (
               <div className="text-center p-4 text-sm text-destructive bg-destructive/10 rounded-xl">{processingResult.error}</div>
-            ) : (
-              <p className="text-sm text-muted-foreground text-center py-4">Click Extract to pull text from the most recent document.</p>
-            )}
-            <div className="flex justify-end gap-2">
+            ) : null}
+
+            <div className="flex justify-end gap-2 pt-2">
               <Button variant="outline" onClick={() => { setShowExtractDialog(false); setProcessingResult(null) }}>Close</Button>
-              <Button disabled={isProcessing || documents.length === 0} onClick={async () => {
-                setIsProcessing(true); setProcessingResult(null)
-                try {
-                  const base64 = documents[0] ? await getDocBase64(documents[0]) : ''
-                  if (!base64) return
-                  const res = await fetch('/api/pdf/extract-text', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ data: base64 }) })
-                  const result = await res.json()
-                  setProcessingResult(result)
-                } catch (err) { console.error(err) }
-                finally { setIsProcessing(false) }
-              }} className="bg-emerald-600 hover:bg-emerald-700 text-white gap-2">
+              <Button
+                disabled={isProcessing || documents.length === 0}
+                onClick={async () => {
+                  setIsProcessing(true)
+                  setProcessingResult(null)
+                  try {
+                    const targetDoc = documents.find(d => d.id === selectedExtractDocId) || documents[0]
+                    const base64 = targetDoc ? await getDocBase64(targetDoc) : ''
+                    if (!base64) return
+                    const res = await fetch('/api/pdf/extract-text', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ data: base64 })
+                    })
+                    const result = await res.json()
+                    setProcessingResult(result)
+                  } catch (err) { console.error(err) }
+                  finally { setIsProcessing(false) }
+                }}
+                className="bg-emerald-600 hover:bg-emerald-700 text-white gap-2"
+              >
                 {isProcessing ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileTextIcon className="w-4 h-4" />}
-                Extract
+                Extract Text
               </Button>
             </div>
           </div>
