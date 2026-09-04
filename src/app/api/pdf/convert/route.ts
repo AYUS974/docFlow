@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { PDFDocument } from 'pdf-lib'
+import { getPdfjsServer } from '@/lib/pdfjs-server'
 
 export async function POST(request: Request) {
   try {
@@ -12,8 +13,7 @@ export async function POST(request: Request) {
 
     // PDF to TXT — text extraction
     if (format === 'txt') {
-      const pdfjsLib = await import('pdfjs-dist')
-      pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdf-worker/pdf.worker.min.mjs'
+      const pdfjsLib = await getPdfjsServer()
       const pdf = await pdfjsLib.getDocument({ data: bytes }).promise
       let fullText = ''
       for (let i = 1; i <= pdf.numPages; i++) {
@@ -30,8 +30,7 @@ export async function POST(request: Request) {
 
     // PDF to HTML — styled text extraction
     if (format === 'html') {
-      const pdfjsLib = await import('pdfjs-dist')
-      pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdf-worker/pdf.worker.min.mjs'
+      const pdfjsLib = await getPdfjsServer()
       const pdf = await pdfjsLib.getDocument({ data: bytes }).promise
       let html = '<!DOCTYPE html>\n<html><head><meta charset="utf-8"><title>PDF Content</title><style>body{font-family:Georgia,"Times New Roman",serif;max-width:800px;margin:0 auto;padding:20px;color:#333;line-height:1.6}.page{margin-bottom:40px;padding:24px;border:1px solid #e5e7eb;border-radius:12px;page-break-after:always;background:white;box-shadow:0 1px 3px rgba(0,0,0,0.08)}.page h2{color:#111;font-size:14px;text-transform:uppercase;letter-spacing:0.05em;border-bottom:2px solid #10b981;padding-bottom:8px;margin-bottom:16px;font-family:Helvetica,Arial,sans-serif}.page p{margin:8px 0;font-size:15px}</style></head><body>\n'
       for (let i = 1; i <= pdf.numPages; i++) {
@@ -50,11 +49,12 @@ export async function POST(request: Request) {
     // PDF to PNG/JPG — client-side rendering via pdfjs, return instructions
     // (actual rendering happens in the browser for image export)
     if (format === 'jpg' || format === 'png') {
+      const pdfjsLib = await getPdfjsServer()
       return NextResponse.json({
         error: 'Image conversion is performed client-side. Use the editor\'s Export as PNG feature for current page, or the browser print dialog for all pages.',
         clientSide: true,
         format,
-        pageCount: (await (await import('pdfjs-dist')).getDocument({ data: bytes }).promise).numPages,
+        pageCount: (await pdfjsLib.getDocument({ data: bytes }).promise).numPages,
       })
     }
 

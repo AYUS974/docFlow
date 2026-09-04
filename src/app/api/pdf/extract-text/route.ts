@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server'
+import { getPdfjsServer } from '@/lib/pdfjs-server'
 
 export async function POST(request: Request) {
   try {
@@ -7,9 +8,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Missing PDF data' }, { status: 400 })
     }
 
-    const pdfjsLib = await import('pdfjs-dist')
-    pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdf-worker/pdf.worker.min.mjs'
-
+    const pdfjsLib = await getPdfjsServer()
     const bytes = Uint8Array.from(atob(data), c => c.charCodeAt(0))
     const pdf = await pdfjsLib.getDocument({ data: bytes }).promise
 

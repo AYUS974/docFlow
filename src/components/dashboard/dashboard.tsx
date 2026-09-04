@@ -656,9 +656,13 @@ export function Dashboard() {
                   const base64 = documents[0] ? await getDocBase64(documents[0]) : ''
                   if (!base64) return
                   const res = await fetch('/api/pdf/split', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ data: base64, ranges: splitRange.split(';').map(s => s.trim()) }) })
-                  const { files } = await res.json()
-                  files.forEach((f: any, i: number) => { const a = document.createElement('a'); a.href = f.data; a.download = `split-${i + 1}.pdf`; a.click() })
-                  setShowSplitDialog(false)
+                  if (res.ok) {
+                    const { files } = await res.json()
+                    if (Array.isArray(files)) {
+                      files.forEach((f: any, i: number) => { const a = document.createElement('a'); a.href = f.data; a.download = `split-${i + 1}.pdf`; a.click() })
+                      setShowSplitDialog(false)
+                    }
+                  }
                 } catch (err) { console.error(err) }
                 finally { setIsProcessing(false) }
               }} className="bg-emerald-600 hover:bg-emerald-700 text-white gap-2">
@@ -675,15 +679,17 @@ export function Dashboard() {
         <DialogContent className="sm:max-w-md">
           <DialogHeader><DialogTitle>Compress PDF</DialogTitle><DialogDescription>Reduce file size while preserving quality.</DialogDescription></DialogHeader>
           <div className="space-y-4">
-            {processingResult ? (
+            {processingResult?.reduction !== undefined ? (
               <div className="text-center p-4 rounded-xl bg-muted/50">
                 <div className="text-3xl font-bold text-emerald-600">-{processingResult.reduction}%</div>
                 <div className="text-sm text-muted-foreground mt-1">Size reduced</div>
                 <div className="flex justify-center gap-6 mt-3 text-xs">
-                  <div><span className="text-muted-foreground">Original: </span><span className="font-medium">{(processingResult.originalSize / 1024).toFixed(1)} KB</span></div>
-                  <div><span className="text-muted-foreground">Compressed: </span><span className="font-medium text-emerald-600">{(processingResult.compressedSize / 1024).toFixed(1)} KB</span></div>
+                  <div><span className="text-muted-foreground">Original: </span><span className="font-medium">{((processingResult.originalSize || 0) / 1024).toFixed(1)} KB</span></div>
+                  <div><span className="text-muted-foreground">Compressed: </span><span className="font-medium text-emerald-600">{((processingResult.compressedSize || 0) / 1024).toFixed(1)} KB</span></div>
                 </div>
               </div>
+            ) : processingResult?.error ? (
+              <div className="text-center p-4 text-sm text-destructive bg-destructive/10 rounded-xl">{processingResult.error}</div>
             ) : (
               <p className="text-sm text-muted-foreground text-center py-4">Select the most recent document to compress.</p>
             )}
@@ -695,10 +701,12 @@ export function Dashboard() {
                   const base64 = documents[0] ? await getDocBase64(documents[0]) : ''
                   if (!base64) return
                   const res = await fetch('/api/pdf/compress', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ data: base64 }) })
-                  setProcessingResult(await res.json())
-                  // Auto download
-                  const a = document.createElement('a')
-                  a.href = processingResult?.data; a.download = 'compressed.pdf'; a.click()
+                  const result = await res.json()
+                  setProcessingResult(result)
+                  if (result?.data) {
+                    const a = document.createElement('a')
+                    a.href = result.data; a.download = 'compressed.pdf'; a.click()
+                  }
                 } catch (err) { console.error(err) }
                 finally { setIsProcessing(false) }
               }} className="bg-emerald-600 hover:bg-emerald-700 text-white gap-2">
@@ -717,9 +725,9 @@ export function Dashboard() {
           <div className="space-y-4">
             {isProcessing ? (
               <div className="flex items-center justify-center py-8"><Loader2 className="w-6 h-6 animate-spin text-emerald-600" /></div>
-            ) : processingResult ? (
+            ) : processingResult?.pages && Array.isArray(processingResult.pages) ? (
               <div>
-                <div className="text-xs text-muted-foreground mb-2">{processingResult.totalChars} characters extracted across {processingResult.pages.length} pages</div>
+                <div className="text-xs text-muted-foreground mb-2">{(processingResult.totalChars || 0)} characters extracted across {processingResult.pages.length} pages</div>
                 <ScrollArea className="h-64 rounded-lg border">
                   <div className="p-3 space-y-3">
                     {processingResult.pages.map((p: any) => (
@@ -731,12 +739,14 @@ export function Dashboard() {
                   </div>
                 </ScrollArea>
                 <Button variant="outline" className="mt-2 w-full gap-2" onClick={() => {
-                  const text = processingResult.pages.map((p: any) => `--- Page ${p.pageNumber} ---\n${p.text}`).join('\n\n')
+                  const text = (processingResult.pages || []).map((p: any) => `--- Page ${p.pageNumber} ---\n${p.text}`).join('\n\n')
                   navigator.clipboard.writeText(text)
                 }}>
                   <Copy className="w-4 h-4" /> Copy All Text
                 </Button>
               </div>
+            ) : processingResult?.error ? (
+              <div className="text-center p-4 text-sm text-destructive bg-destructive/10 rounded-xl">{processingResult.error}</div>
             ) : (
               <p className="text-sm text-muted-foreground text-center py-4">Click Extract to pull text from the most recent document.</p>
             )}
@@ -748,7 +758,8 @@ export function Dashboard() {
                   const base64 = documents[0] ? await getDocBase64(documents[0]) : ''
                   if (!base64) return
                   const res = await fetch('/api/pdf/extract-text', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ data: base64 }) })
-                  setProcessingResult(await res.json())
+                  const result = await res.json()
+                  setProcessingResult(result)
                 } catch (err) { console.error(err) }
                 finally { setIsProcessing(false) }
               }} className="bg-emerald-600 hover:bg-emerald-700 text-white gap-2">
