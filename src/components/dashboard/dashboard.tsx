@@ -47,6 +47,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
 import { ScrollArea } from '@/components/ui/scroll-area'
+import { uint8ArrayToBase64 } from '@/lib/utils'
 
 export function Dashboard() {
   const {
@@ -184,12 +185,7 @@ export function Dashboard() {
     setUploading(true)
     try {
       const arrayBuffer = await file.arrayBuffer()
-      const base64 = btoa(
-        new Uint8Array(arrayBuffer).reduce(
-          (data, byte) => data + String.fromCharCode(byte),
-          ''
-        )
-      )
+      const base64 = uint8ArrayToBase64(new Uint8Array(arrayBuffer))
       const dataUrl = `data:application/pdf;base64,${base64}`
 
       // Get page count using pdf.js

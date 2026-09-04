@@ -9,7 +9,8 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Missing data or format' }, { status: 400 })
     }
 
-    const bytes = Uint8Array.from(atob(data), c => c.charCodeAt(0))
+    const rawBase64 = data.replace(/^data:application\/pdf;base64,/, '')
+    const bytes = Buffer.from(rawBase64, 'base64')
 
     // PDF to TXT — text extraction
     if (format === 'txt') {

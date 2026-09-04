@@ -16,6 +16,7 @@ import {
 } from 'lucide-react'
 import { motion } from 'framer-motion'
 import { PDFDocument } from 'pdf-lib'
+import { uint8ArrayToBase64 } from '@/lib/utils'
 
 interface PageManagerProps {
   pdfDoc: any
@@ -67,7 +68,7 @@ export function PageManager({ pdfDoc, pdfBytesRef, fileData }: PageManagerProps)
     try {
       const rotationsObj: Record<string, number> = {}
       for (const [k, v] of pageRotations) rotationsObj[String(k)] = v
-      const base64 = btoa(String.fromCharCode(...pdfBytesRef.current))
+      const base64 = uint8ArrayToBase64(pdfBytesRef.current)
       const res = await fetch('/api/pdf/rotate', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ data: base64, rotations: rotationsObj }),

@@ -9,7 +9,8 @@ export async function POST(request: Request) {
     }
 
     const pdfjsLib = await getPdfjsServer()
-    const bytes = Uint8Array.from(atob(data), c => c.charCodeAt(0))
+    const rawBase64 = data.replace(/^data:application\/pdf;base64,/, '')
+    const bytes = Buffer.from(rawBase64, 'base64')
     const pdf = await pdfjsLib.getDocument({ data: bytes }).promise
 
     const pages: { pageNumber: number; text: string }[] = []

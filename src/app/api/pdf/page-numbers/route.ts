@@ -8,7 +8,8 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Missing PDF data' }, { status: 400 })
     }
 
-    const bytes = Uint8Array.from(atob(data), c => c.charCodeAt(0))
+    const rawBase64 = data.replace(/^data:application\/pdf;base64,/, '')
+    const bytes = Buffer.from(rawBase64, 'base64')
     const pdf = await PDFDocument.load(bytes)
     const font = await pdf.embedFont(StandardFonts.Helvetica)
     const pages = pdf.getPages()
@@ -40,7 +41,7 @@ export async function POST(request: Request) {
     })
 
     const pdfBytes = await pdf.save()
-    const base64 = btoa(String.fromCharCode(...pdfBytes))
+    const base64 = Buffer.from(pdfBytes).toString('base64')
     return NextResponse.json({
       data: `data:application/pdf;base64,${base64}`,
       pageCount: pdf.getPageCount(),

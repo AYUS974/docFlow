@@ -12,7 +12,8 @@ export async function POST(request: Request) {
 
     for (const base64 of files) {
       try {
-        const bytes = Uint8Array.from(atob(base64), c => c.charCodeAt(0))
+        const rawBase64 = base64.replace(/^data:application\/pdf;base64,/, '')
+        const bytes = Buffer.from(rawBase64, 'base64')
         const pdf = await PDFDocument.load(bytes)
         const pages = await mergedPdf.copyPages(pdf, pdf.getPageIndices())
         pages.forEach(page => mergedPdf.addPage(page))
@@ -22,7 +23,7 @@ export async function POST(request: Request) {
     }
 
     const pdfBytes = await mergedPdf.save()
-    const resultBase64 = btoa(String.fromCharCode(...pdfBytes))
+    const resultBase64 = Buffer.from(pdfBytes).toString('base64')
     return NextResponse.json({
       data: `data:application/pdf;base64,${resultBase64}`,
       pageCount: mergedPdf.getPageCount(),

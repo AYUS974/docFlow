@@ -282,13 +282,14 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Missing PDF data' }, { status: 400 })
     }
     
-    const bytes = Uint8Array.from(atob(data), c => c.charCodeAt(0))
+    const rawBase64 = data.replace(/^data:application\/pdf;base64,/, '')
+    const bytes = Buffer.from(rawBase64, 'base64')
     
     // Action: remove password (decrypt) - load with ignoreEncryption
     if (action === 'remove') {
       const pdf = await PDFDocument.load(bytes, { ignoreEncryption: true })
       const savedBytes = await pdf.save({ useObjectStreams: true })
-      const base64 = btoa(String.fromCharCode(...new Uint8Array(savedBytes)))
+      const base64 = Buffer.from(savedBytes).toString('base64')
       return NextResponse.json({
         data: `data:application/pdf;base64,${base64}`,
         message: 'Password protection removed',
@@ -310,7 +311,7 @@ export async function POST(request: Request) {
       const encryptedBytes = encryptPdfBytes(
         new Uint8Array(decryptedBytes), password, owner, perms
       )
-      const base64 = btoa(String.fromCharCode(...encryptedBytes))
+      const base64 = Buffer.from(encryptedBytes).toString('base64')
       return NextResponse.json({
         data: `data:application/pdf;base64,${base64}`,
         message: 'Password changed successfully',
@@ -335,7 +336,7 @@ export async function POST(request: Request) {
       new Uint8Array(normalizedBytes), password, owner, perms
     )
     
-    const base64 = btoa(String.fromCharCode(...encryptedBytes))
+    const base64 = Buffer.from(encryptedBytes).toString('base64')
     
     return NextResponse.json({
       data: `data:application/pdf;base64,${base64}`,

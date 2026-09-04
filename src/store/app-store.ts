@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { persist, createJSONStorage } from 'zustand/middleware'
+import { uint8ArrayToBase64 } from '@/lib/utils'
 
 export type View = 'landing' | 'editor' | 'dashboard' | 'pricing'
 
@@ -792,11 +793,7 @@ export const useAppStore = create<AppState>()(
           currentView: 'editor' as const,
         }))
         try {
-          const base64 = btoa(
-            new Uint8Array(arrayBuffer).reduce(
-              (data, byte) => data + String.fromCharCode(byte), ''
-            )
-          )
+          const base64 = uint8ArrayToBase64(new Uint8Array(arrayBuffer))
           await fetch('/api/documents', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },

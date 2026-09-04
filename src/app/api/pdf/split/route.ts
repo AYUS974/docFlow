@@ -27,7 +27,8 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Missing data or ranges' }, { status: 400 })
     }
 
-    const bytes = Uint8Array.from(atob(data), c => c.charCodeAt(0))
+    const rawBase64 = data.replace(/^data:application\/pdf;base64,/, '')
+    const bytes = Buffer.from(rawBase64, 'base64')
     const srcPdf = await PDFDocument.load(bytes)
     const totalPages = srcPdf.getPageCount()
 
@@ -42,7 +43,7 @@ export async function POST(request: Request) {
       copiedPages.forEach(p => newPdf.addPage(p))
 
       const pdfBytes = await newPdf.save()
-      const base64 = btoa(String.fromCharCode(...pdfBytes))
+      const base64 = Buffer.from(pdfBytes).toString('base64')
       results.push({
         range,
         data: `data:application/pdf;base64,${base64}`,

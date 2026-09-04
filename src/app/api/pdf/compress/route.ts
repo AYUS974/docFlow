@@ -97,7 +97,8 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Missing PDF data' }, { status: 400 })
     }
     
-    const originalBytes = Uint8Array.from(atob(data), c => c.charCodeAt(0))
+    const rawBase64 = data.replace(/^data:application\/pdf;base64,/, '')
+    const originalBytes = Buffer.from(rawBase64, 'base64')
     
     // Get PDF info before compression
     const info = await getPdfInfo(originalBytes)
@@ -114,8 +115,8 @@ export async function POST(request: Request) {
     // Analyze results
     const analysis = analyzePdf(originalBytes, compressedBytes)
     
-    // Convert to base64 data URL
-    const base64 = btoa(String.fromCharCode(...compressedBytes))
+    // Convert to base64 data URL safely via Buffer
+    const base64 = Buffer.from(compressedBytes).toString('base64')
     
     return NextResponse.json({
       data: `data:application/pdf;base64,${base64}`,
