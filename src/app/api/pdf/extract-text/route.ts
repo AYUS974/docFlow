@@ -11,7 +11,8 @@ export async function POST(request: Request) {
     const pdfjsLib = await getPdfjsServer()
     const rawBase64 = data.replace(/^data:application\/pdf;base64,/, '')
     const bytes = Buffer.from(rawBase64, 'base64')
-    const pdf = await pdfjsLib.getDocument({ data: bytes }).promise
+    const uint8 = new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+    const pdf = await pdfjsLib.getDocument({ data: uint8 }).promise
 
     const pages: { pageNumber: number; text: string }[] = []
     for (let i = 1; i <= pdf.numPages; i++) {
@@ -19,8 +20,9 @@ export async function POST(request: Request) {
       const textContent = await page.getTextContent()
       const text = textContent.items
         .filter((item: any) => 'str' in item)
-        .map((item: any) => item.str)
-        .join(' ')
+        .map((item: any) => item.str + (item.hasEOL ? '\n' : ' '))
+        .join('')
+        .replace(/[ \t]+\n/g, '\n')
       pages.push({ pageNumber: i, text: text.trim() })
     }
 
