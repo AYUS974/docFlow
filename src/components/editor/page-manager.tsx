@@ -83,8 +83,8 @@ export function PageManager({ pdfDoc, pdfBytesRef, fileData }: PageManagerProps)
 
   return (
     <>
-      <div className="flex flex-col h-full">
-        <div className="p-3 border-b border-border/40">
+      <div className="flex flex-col h-full min-h-0 overflow-hidden">
+        <div className="p-3 border-b border-border/40 shrink-0">
           <h3 className="text-sm font-semibold mb-2">Pages</h3>
           <div className="flex gap-1">
             <TooltipProvider delayDuration={300}>
@@ -107,7 +107,7 @@ export function PageManager({ pdfDoc, pdfBytesRef, fileData }: PageManagerProps)
             </TooltipProvider>
           </div>
         </div>
-        <ScrollArea className="flex-1 py-2 px-2">
+        <div className="flex-1 min-h-0 overflow-y-auto py-2 px-2">
           <div className="space-y-1.5">
             {displayPages.map((pageNum, idx) => {
               const rotation = pageRotations.get(pageNum) || 0
@@ -158,7 +158,7 @@ export function PageManager({ pdfDoc, pdfBytesRef, fileData }: PageManagerProps)
               )
             })}
           </div>
-        </ScrollArea>
+        </div>
       </div>
 
       {/* Extract Pages Dialog */}

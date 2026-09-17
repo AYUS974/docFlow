@@ -1927,32 +1927,32 @@ export function PdfEditor() {
               animate={{ width: isMobile ? 240 : 200, opacity: 1 }}
               exit={{ width: 0, opacity: 0 }}
               transition={{ duration: 0.2 }}
-              className="border-r border-border/60 bg-background shrink-0 overflow-hidden flex flex-col md:relative fixed inset-y-0 left-0 z-50 md:z-0 shadow-2xl md:shadow-none"
+              className="border-r border-border/60 bg-background shrink-0 overflow-hidden flex flex-col md:relative fixed inset-y-0 left-0 z-50 md:z-0 shadow-2xl md:shadow-none h-full min-h-0"
             >
               <div className="flex border-b border-border/40 shrink-0">
                 <button className={`flex-1 py-2 text-xs font-medium transition-colors ${sidebarMode === 'thumbnails' ? 'text-emerald-600 border-b-2 border-emerald-600' : 'text-muted-foreground hover:text-foreground'}`} onClick={() => setSidebarMode('thumbnails')}>Thumbnails</button>
                 <button className={`flex-1 py-2 text-xs font-medium transition-colors ${sidebarMode === 'pages' ? 'text-emerald-600 border-b-2 border-emerald-600' : 'text-muted-foreground hover:text-foreground'}`} onClick={() => setSidebarMode('pages')}>Pages</button>
               </div>
               {sidebarMode === 'thumbnails' ? (
-                <ScrollArea className="flex-1 py-2 px-2">
-                  <div className="space-y-2">
-                    {pageThumbnails.map((thumb) => {
-                      const thumbAnnotCount = annotations.filter(a => a.pageNumber === thumb.page).length
-                      const rotation = pageRotations.get(thumb.page) || 0
-                      return (
-                        <button key={thumb.page} className={`w-full rounded-lg border-2 transition-all p-1 relative ${currentPage === thumb.page ? 'border-emerald-500 shadow-sm' : 'border-transparent hover:border-border'}`} onClick={() => setCurrentPage(thumb.page)}>
-                          <div className="relative w-full">
-                            <img src={thumb.dataUrl} alt={`Page ${thumb.page}`} className="w-full rounded" style={rotation ? { transform: `rotate(${rotation}deg)` } : undefined} />
-                            <div className="absolute bottom-1 right-1 bg-black/60 text-white text-[10px] px-1.5 py-0.5 rounded">{thumb.page}</div>
-                            {thumbAnnotCount > 0 && <div className="absolute top-1 right-1 bg-emerald-600 text-white text-[9px] font-bold w-4 h-4 rounded-full flex items-center justify-center">{thumbAnnotCount}</div>}
-                          </div>
-                        </button>
-                      )
-                    })}
-                  </div>
-                </ScrollArea>
+                <div className="flex-1 min-h-0 overflow-y-auto py-2 px-2 space-y-2">
+                  {pageThumbnails.map((thumb) => {
+                    const thumbAnnotCount = annotations.filter(a => a.pageNumber === thumb.page).length
+                    const rotation = pageRotations.get(thumb.page) || 0
+                    return (
+                      <button key={thumb.page} className={`w-full rounded-lg border-2 transition-all p-1 relative ${currentPage === thumb.page ? 'border-emerald-500 shadow-sm' : 'border-transparent hover:border-border'}`} onClick={() => setCurrentPage(thumb.page)}>
+                        <div className="relative w-full">
+                          <img src={thumb.dataUrl} alt={`Page ${thumb.page}`} className="w-full rounded" style={rotation ? { transform: `rotate(${rotation}deg)` } : undefined} />
+                          <div className="absolute bottom-1 right-1 bg-black/60 text-white text-[10px] px-1.5 py-0.5 rounded">{thumb.page}</div>
+                          {thumbAnnotCount > 0 && <div className="absolute top-1 right-1 bg-emerald-600 text-white text-[9px] font-bold w-4 h-4 rounded-full flex items-center justify-center">{thumbAnnotCount}</div>}
+                        </div>
+                      </button>
+                    )
+                  })}
+                </div>
               ) : (
-                <PageManager pdfDoc={pdfDocRef.current} pdfBytesRef={pdfBytesRef} fileData={currentDocument?.fileData || null} />
+                <div className="flex-1 min-h-0 overflow-hidden flex flex-col">
+                  <PageManager pdfDoc={pdfDocRef.current} pdfBytesRef={pdfBytesRef} fileData={currentDocument?.fileData || null} />
+                </div>
               )}
             </motion.div>
           )}
@@ -2353,12 +2353,12 @@ export function PdfEditor() {
         {/* Right Panel - Annotations */}
         <AnimatePresence>
           {showAnnotationPanel && (
-            <motion.div initial={{ width: 0, opacity: 0 }} animate={{ width: 280, opacity: 1 }} exit={{ width: 0, opacity: 0 }} transition={{ duration: 0.2 }} className="border-l border-border/60 bg-background shrink-0 overflow-hidden">
-              <div className="p-3 border-b border-border/40 flex items-center justify-between">
+            <motion.div initial={{ width: 0, opacity: 0 }} animate={{ width: 280, opacity: 1 }} exit={{ width: 0, opacity: 0 }} transition={{ duration: 0.2 }} className="border-l border-border/60 bg-background shrink-0 overflow-hidden flex flex-col h-full min-h-0">
+              <div className="p-3 border-b border-border/40 flex items-center justify-between shrink-0">
                 <h3 className="text-sm font-semibold">Annotations <span className="ml-1 text-xs text-muted-foreground font-normal">({pageAnnotations.length})</span></h3>
                 {pageAnnotations.length > 0 && <Button variant="ghost" size="icon" className="h-7 w-7" onClick={clearAnnotations} title="Clear all"><XCircle className="w-3.5 h-3.5 text-destructive" /></Button>}
               </div>
-              <ScrollArea className="h-[calc(100%-48px)]">
+              <div className="flex-1 min-h-0 overflow-y-auto">
                 {totalAnnotations === 0 ? (
                   <div className="p-6 text-center text-sm text-muted-foreground">
                     <FileText className="w-8 h-8 mx-auto mb-3 opacity-40" />
@@ -2387,7 +2387,7 @@ export function PdfEditor() {
                     ))}
                   </div>
                 )}
-              </ScrollArea>
+              </div>
             </motion.div>
           )}
         </AnimatePresence>
