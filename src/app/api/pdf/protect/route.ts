@@ -47,9 +47,29 @@ function md5(data: Buffer): Buffer {
 function rc4(key: Buffer, data: Buffer): Buffer {
   const keyLen = Math.min(key.length, 16)
   const k = key.subarray(0, keyLen)
-  // Node.js RC4
-  const cipher = createCipheriv('rc4', k, null)
-  return Buffer.concat([cipher.update(data), cipher.final()])
+  const s = new Uint8Array(256)
+  for (let idx = 0; idx < 256; idx++) s[idx] = idx
+
+  let j = 0
+  for (let idx = 0; idx < 256; idx++) {
+    j = (j + s[idx] + k[idx % k.length]) % 256
+    const tmp = s[idx]
+    s[idx] = s[j]
+    s[j] = tmp
+  }
+
+  let i = 0
+  j = 0
+  const out = Buffer.alloc(data.length)
+  for (let idx = 0; idx < data.length; idx++) {
+    i = (i + 1) % 256
+    j = (j + s[i]) % 256
+    const tmp = s[i]
+    s[i] = s[j]
+    s[j] = tmp
+    out[idx] = data[idx] ^ s[(s[i] + s[j]) % 256]
+  }
+  return out
 }
 
 function computeOValue(ownerPwd: Buffer, userPwd: Buffer, revision: number): string {
@@ -305,7 +325,7 @@ export async function POST(request: Request) {
       }
       // First decrypt, then re-encrypt with new password
       const pdf = await PDFDocument.load(bytes, { ignoreEncryption: true })
-      const decryptedBytes = await pdf.save({ useObjectStreams: true })
+      const decryptedBytes = await pdf.save({ useObjectStreams: false })
       const owner = ownerPassword || password
       const perms = computePermissions(permissions || ['all'])
       const encryptedBytes = encryptPdfBytes(
@@ -329,7 +349,7 @@ export async function POST(request: Request) {
     
     // Load and re-save with pdf-lib to normalize the PDF
     const pdf = await PDFDocument.load(bytes, { ignoreEncryption: true })
-    const normalizedBytes = await pdf.save({ useObjectStreams: true })
+    const normalizedBytes = await pdf.save({ useObjectStreams: false })
     
     // Encrypt the normalized PDF
     const encryptedBytes = encryptPdfBytes(
