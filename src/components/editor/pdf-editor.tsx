@@ -137,6 +137,8 @@ export function PdfEditor() {
   const [textItalic, setTextItalic] = useState(false)
   const textSubmitRef = useRef<() => void>(() => {})
   const isSpawningRef = useRef(false)
+  const wheelAccumulatorRef = useRef(0)
+  const wheelCooldownRef = useRef(false)
   const [annotFontDropdownId, setAnnotFontDropdownId] = useState<string | null>(null)
   const [annotSizeDropdownId, setAnnotSizeDropdownId] = useState<string | null>(null)
   const [annotColorDropdownId, setAnnotColorDropdownId] = useState<string | null>(null)
@@ -889,12 +891,56 @@ export function PdfEditor() {
   }
   const handlePanEnd = () => { setIsPanning(false); panStartRef.current = null }
 
-  // Scroll wheel zoom
+  // Scroll wheel zoom + page navigation
   const handleWheel = (e: React.WheelEvent) => {
     if (e.ctrlKey || e.metaKey) {
       e.preventDefault()
       const delta = e.deltaY > 0 ? -0.1 : 0.1
-      setZoom(zoom + delta)
+      setZoom(Math.max(0.25, Math.min(5, zoom + delta)))
+      return
+    }
+
+    const container = containerRef.current
+    if (!container) return
+
+    const { scrollTop, scrollHeight, clientHeight } = container
+    const isAtBottom = scrollTop + clientHeight >= scrollHeight - 8
+    const isAtTop = scrollTop <= 8
+    const isScrollable = scrollHeight > clientHeight + 10
+
+    // If scrolling down at the bottom of the page (or if the page fits on screen)
+    if (e.deltaY > 0 && (isAtBottom || !isScrollable)) {
+      if (currentPage < totalPages && !wheelCooldownRef.current) {
+        wheelAccumulatorRef.current += e.deltaY
+        if (wheelAccumulatorRef.current > 40) {
+          wheelCooldownRef.current = true
+          wheelAccumulatorRef.current = 0
+          setCurrentPage(currentPage + 1)
+          setTimeout(() => {
+            if (containerRef.current) containerRef.current.scrollTop = 0
+            wheelCooldownRef.current = false
+          }, 250)
+        }
+      }
+    }
+    // If scrolling up at the top of the page (or if the page fits on screen)
+    else if (e.deltaY < 0 && (isAtTop || !isScrollable)) {
+      if (currentPage > 1 && !wheelCooldownRef.current) {
+        wheelAccumulatorRef.current += e.deltaY
+        if (wheelAccumulatorRef.current < -40) {
+          wheelCooldownRef.current = true
+          wheelAccumulatorRef.current = 0
+          setCurrentPage(currentPage - 1)
+          setTimeout(() => {
+            if (containerRef.current) {
+              containerRef.current.scrollTop = Math.max(0, containerRef.current.scrollHeight - containerRef.current.clientHeight)
+            }
+            wheelCooldownRef.current = false
+          }, 250)
+        }
+      }
+    } else {
+      wheelAccumulatorRef.current = 0
     }
   }
 
@@ -1435,6 +1481,20 @@ export function PdfEditor() {
       if (e.key === '+' || e.key === '=') setZoom(zoom + 0.1)
       if (e.key === '-') setZoom(zoom - 0.1)
       if (e.key === '0' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); setZoom(1) }
+      if (e.key === 'PageDown' || ((e.key === 'ArrowRight' || e.key === 'ArrowDown') && (e.altKey || currentTool === 'select' || currentTool === 'pan'))) {
+        if (currentPage < totalPages) {
+          e.preventDefault()
+          setCurrentPage(currentPage + 1)
+          if (containerRef.current) containerRef.current.scrollTop = 0
+        }
+      }
+      if (e.key === 'PageUp' || ((e.key === 'ArrowLeft' || e.key === 'ArrowUp') && (e.altKey || currentTool === 'select' || currentTool === 'pan'))) {
+        if (currentPage > 1) {
+          e.preventDefault()
+          setCurrentPage(currentPage - 1)
+          if (containerRef.current) containerRef.current.scrollTop = 0
+        }
+      }
       if (e.key === '?') setShowShortcuts(true)
       if (e.key === 'Delete' && currentTool === 'select') {
         // Future: delete selected annotation
@@ -1442,7 +1502,7 @@ export function PdfEditor() {
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [setCurrentTool, goBack, setZoom, zoom, undo, redo, textInput.visible, editingTextItem, setEditingTextItem, isCropping, setCropping, currentTool])
+  }, [setCurrentTool, goBack, setZoom, zoom, undo, redo, textInput.visible, editingTextItem, setEditingTextItem, isCropping, setCropping, currentTool, currentPage, totalPages, setCurrentPage])
 
   const selectedAnnot = selectedAnnotId ? annotations.find(a => a.id === selectedAnnotId) : null
   const pageAnnotations = annotations.filter((a) => a.pageNumber === currentPage)
