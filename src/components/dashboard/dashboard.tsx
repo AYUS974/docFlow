@@ -48,6 +48,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { uint8ArrayToBase64 } from '@/lib/utils'
+import { toast } from 'sonner'
 
 export function Dashboard() {
   const {
@@ -149,9 +150,11 @@ export function Dashboard() {
         setView('editor')
       } else {
         console.error('Failed to fetch full document payload')
+        toast.error('Document not found on server. Please upload it again.')
       }
     } catch (err) {
       console.error('Error opening document:', err)
+      toast.error('Could not open document. Please try re-uploading.')
     } finally {
       setLoadingDocId(null)
     }

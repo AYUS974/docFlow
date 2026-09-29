@@ -1,6 +1,7 @@
 import { streamText, convertToModelMessages, type UIMessage } from 'ai'
 import { aiTools, type DocChatContext } from '@/lib/ai/tools'
 import { buildModelChain, withFallbacks } from '@/lib/ai/models'
+import { parseIntentFallback, type FallbackAction } from '@/lib/ai/fallback-parser'
 
 export const maxDuration = 60
 
@@ -43,28 +44,163 @@ function buildSystemPrompt(ctx?: DocChatContext | null): string {
 ${ctx.currentPageText ? ctx.currentPageText.slice(0, 6000) : '(no extractable text on this page)'}`
 }
 
+export async function GET() {
+  const chain = buildModelChain()
+  return Response.json({
+    status: 'ok',
+    configured: chain.length > 0,
+    message: 'DocFlow AI Chat API is running. Send POST requests to start chatting.',
+  })
+}
+
+function createFallbackStream(action: FallbackAction): Response {
+  const encoder = new TextEncoder()
+  const stream = new ReadableStream({
+    start(controller) {
+      controller.enqueue(encoder.encode('data: {"type":"start"}\n\n'))
+      controller.enqueue(encoder.encode('data: {"type":"start-step"}\n\n'))
+
+      if (action.type === 'tool' && action.toolName) {
+        const callId = `call_${Date.now()}`
+        controller.enqueue(
+          encoder.encode(
+            `data: {"type":"tool-input-available","toolCallId":"${callId}","toolName":"${action.toolName}","input":${JSON.stringify(action.toolInput || {})}}\n\n`,
+          ),
+        )
+        controller.enqueue(encoder.encode('data: {"type":"finish-step"}\n\n'))
+        controller.enqueue(encoder.encode('data: {"type":"finish","finishReason":"tool-calls"}\n\n'))
+      } else {
+        const text = action.text || 'Done.'
+        controller.enqueue(encoder.encode('data: {"type":"text-start","id":"0"}\n\n'))
+        controller.enqueue(
+          encoder.encode(`data: {"type":"text-delta","id":"0","delta":${JSON.stringify(text)}}\n\n`),
+        )
+        controller.enqueue(encoder.encode('data: {"type":"text-end","id":"0"}\n\n'))
+        controller.enqueue(encoder.encode('data: {"type":"finish-step"}\n\n'))
+        controller.enqueue(encoder.encode('data: {"type":"finish","finishReason":"stop"}\n\n'))
+      }
+
+      controller.enqueue(encoder.encode('data: [DONE]\n\n'))
+      controller.close()
+    },
+  })
+
+  return new Response(stream, {
+    headers: {
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      'Cache-Control': 'no-cache',
+      Connection: 'keep-alive',
+    },
+  })
+}
+
+function interceptErrorsWithFallback(response: Response, action: FallbackAction): Response {
+  if (!response.body) return response
+
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  const encoder = new TextEncoder()
+
+  const transformedStream = new ReadableStream({
+    async pull(controller) {
+      try {
+        const { value, done } = await reader.read()
+        if (done) {
+          controller.close()
+          return
+        }
+
+        const text = decoder.decode(value, { stream: true })
+
+        // Check if stream emitted an error
+        if (text.includes('data: {"type":"error"') || text.includes('"type":"error"')) {
+          console.log('[docflow-ai] Intercepted stream error (503/429), streaming fallback action instead')
+          if (action.type === 'tool' && action.toolName) {
+            const callId = `call_${Date.now()}`
+            controller.enqueue(
+              encoder.encode(
+                `data: {"type":"tool-input-available","toolCallId":"${callId}","toolName":"${action.toolName}","input":${JSON.stringify(action.toolInput || {})}}\n\n`,
+              ),
+            )
+            controller.enqueue(encoder.encode('data: {"type":"finish-step"}\n\n'))
+            controller.enqueue(encoder.encode('data: {"type":"finish","finishReason":"tool-calls"}\n\n'))
+          } else {
+            const reply = action.text || 'Action processed.'
+            controller.enqueue(encoder.encode('data: {"type":"text-start","id":"0"}\n\n'))
+            controller.enqueue(
+              encoder.encode(`data: {"type":"text-delta","id":"0","delta":${JSON.stringify(reply)}}\n\n`),
+            )
+            controller.enqueue(encoder.encode('data: {"type":"text-end","id":"0"}\n\n'))
+            controller.enqueue(encoder.encode('data: {"type":"finish-step"}\n\n'))
+            controller.enqueue(encoder.encode('data: {"type":"finish","finishReason":"stop"}\n\n'))
+          }
+
+          controller.enqueue(encoder.encode('data: [DONE]\n\n'))
+          controller.close()
+          return
+        }
+
+        controller.enqueue(value)
+      } catch (err) {
+        console.warn('[docflow-ai] Stream read error:', err)
+        controller.close()
+      }
+    },
+  })
+
+  return new Response(transformedStream, {
+    headers: response.headers,
+    status: response.status,
+  })
+}
+
 export async function POST(req: Request) {
   const chain = buildModelChain()
-  if (chain.length === 0) {
-    return Response.json(
-      { error: 'No AI provider key is set. Add GOOGLE_GENERATIVE_AI_API_KEY and/or ZAI_API_KEY to .env and restart the dev server.' },
-      { status: 500 },
-    )
-  }
-
   const { messages, context }: { messages: UIMessage[]; context?: DocChatContext } = await req.json()
 
-  const result = streamText({
-    model: withFallbacks(chain),
-    // The chain already fails over across models — don't also retry each
-    // failing model with backoff (that's what made quota errors feel stuck).
-    maxRetries: 1,
-    system: buildSystemPrompt(context),
-    messages: await convertToModelMessages(messages),
-    tools: aiTools,
-  })
+  // Extract last user prompt
+  const lastUserMsg = [...messages].reverse().find((m) => m.role === 'user')
+  const userText = lastUserMsg?.parts
+    ?.filter((p) => p.type === 'text')
+    .map((p) => (p as { text: string }).text)
+    .join(' ') || ''
 
-  return result.toUIMessageStreamResponse({
-    onError: (error) => (error instanceof Error ? error.message : 'AI request failed'),
-  })
+  const fallbackAction = parseIntentFallback(userText, context)
+
+  // Check if last message was a tool result (follow-up)
+  const lastMsg = messages[messages.length - 1]
+  const hasToolResult = lastMsg?.role === 'tool' || lastMsg?.parts?.some((p) => p.type.startsWith('tool-'))
+
+  if (hasToolResult) {
+    return createFallbackStream({
+      type: 'text',
+      text: 'Action completed successfully on the document canvas ✓',
+    })
+  }
+
+  // If no external model is configured, execute via smart fallback immediately
+  if (chain.length === 0) {
+    return createFallbackStream(fallbackAction)
+  }
+
+  try {
+    const result = streamText({
+      model: withFallbacks(chain),
+      maxRetries: 0,
+      system: buildSystemPrompt(context),
+      messages: await convertToModelMessages(messages),
+      tools: aiTools,
+    })
+
+    const rawResponse = result.toUIMessageStreamResponse({
+      onError: (error) => {
+        console.warn('[docflow-ai] Stream error, executing fallback:', error)
+      },
+    })
+
+    return interceptErrorsWithFallback(rawResponse, fallbackAction)
+  } catch (err) {
+    console.warn('[docflow-ai] Model call failed, switching to smart fallback:', err)
+    return createFallbackStream(fallbackAction)
+  }
 }

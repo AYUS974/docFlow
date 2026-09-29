@@ -15,7 +15,11 @@ import type { LanguageModelV4 } from '@ai-sdk/provider'
  *  - ZAI_API_KEY                   enables Z.AI    (models: DOCFLOW_ZAI_MODELS, default glm-4.7,glm-4.7-flash)
  */
 
-const GEMINI_MODEL = process.env.DOCFLOW_AI_MODEL || 'gemini-2.5-flash'
+const GEMINI_MODELS = (process.env.DOCFLOW_AI_MODEL || 'gemini-3.6-flash')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean)
+
 const ZAI_MODELS = (process.env.DOCFLOW_ZAI_MODELS || 'glm-4.7-flash')
   .split(',')
   .map((s) => s.trim())
@@ -23,8 +27,31 @@ const ZAI_MODELS = (process.env.DOCFLOW_ZAI_MODELS || 'glm-4.7-flash')
 
 export function buildModelChain(): LanguageModelV4[] {
   const chain: LanguageModelV4[] = []
+  
+  if (process.env.GROQ_API_KEY) {
+    const groq = createOpenAICompatible({
+      name: 'groq',
+      baseURL: 'https://api.groq.com/openai/v1',
+      apiKey: process.env.GROQ_API_KEY,
+    })
+    const groqModel = process.env.DOCFLOW_GROQ_MODEL || 'llama-3.3-70b-versatile'
+    chain.push(groq.chatModel(groqModel))
+  }
+
+  if (process.env.OPENAI_API_KEY) {
+    const openai = createOpenAICompatible({
+      name: 'openai',
+      baseURL: 'https://api.openai.com/v1',
+      apiKey: process.env.OPENAI_API_KEY,
+    })
+    const openaiModel = process.env.DOCFLOW_OPENAI_MODEL || 'gpt-4o-mini'
+    chain.push(openai.chatModel(openaiModel))
+  }
+
   if (process.env.GOOGLE_GENERATIVE_AI_API_KEY) {
-    chain.push(google(GEMINI_MODEL))
+    for (const id of GEMINI_MODELS) {
+      chain.push(google(id))
+    }
   }
   if (process.env.ZAI_API_KEY) {
     // Z.AI (Zhipu) exposes an OpenAI-compatible Chat Completions API.

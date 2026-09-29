@@ -228,7 +228,11 @@ export function AiChatPanel() {
               {error && (
                 <div className="rounded-md border border-red-300/60 bg-red-50 dark:bg-red-950/30 px-3 py-2 text-xs text-red-700 dark:text-red-300">
                   <p className="font-medium flex items-center gap-1.5"><AlertTriangle className="w-3.5 h-3.5" /> AI error</p>
-                  <p className="mt-1 break-words">{error.message || 'Request failed. Check GOOGLE_GENERATIVE_AI_API_KEY in .env.'}</p>
+                  <p className="mt-1 break-words">
+                    {error.message?.includes('<!DOCTYPE') || error.message?.includes('<html')
+                      ? 'Server connection error (404/500). Please refresh the page or check your dev server.'
+                      : error.message || 'Request failed. Check your API key in .env.local.'}
+                  </p>
                 </div>
               )}
             </div>
