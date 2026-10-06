@@ -77,8 +77,11 @@ export function parseIntentFallback(prompt: string, context?: DocChatContext | n
 
   // 4. Redact Text Intent
   if (p.includes('redact') || p.includes('black out') || p.includes('hide text')) {
-    const match = raw.match(/redact\s+["']?([^"'\n,]+)["']?/i)
+    const match = raw.match(/(?:redact|black\s+out|hide\s+text)\s+["']?([^"'\n,]+)["']?/i)
     let query = match ? match[1].replace(/^(the|all|word|text)\s+/i, '').trim() : ''
+    if (query.endsWith('on this page') || query.endsWith('on page 1')) {
+      query = query.replace(/\s+(on this page|on page \d+)$/i, '').trim()
+    }
     if (query) {
       return {
         type: 'tool',
@@ -88,7 +91,23 @@ export function parseIntentFallback(prompt: string, context?: DocChatContext | n
     }
   }
 
-  // 5. Replace Text Intent (e.g. "replace '2024' with '2026'")
+  // 5. Whiteout / Erase Text Intent (e.g. "whiteout machine", "erase invoice", "white out text")
+  if (p.includes('whiteout') || p.includes('white out') || p.includes('white-out') || p.includes('erase') || p.includes('remove word') || p.includes('delete word') || p.includes('clean out')) {
+    const match = raw.match(/(?:whiteout|white\s+out|white-out|erase|remove\s+word|delete\s+word|clean\s+out)\s+["']?([^"'\n,]+)["']?/i)
+    let query = match ? match[1].replace(/^(the|all|word|text)\s+/i, '').trim() : ''
+    if (query.endsWith('on this page') || query.endsWith('on page 1')) {
+      query = query.replace(/\s+(on this page|on page \d+)$/i, '').trim()
+    }
+    if (query) {
+      return {
+        type: 'tool',
+        toolName: 'whiteout_text',
+        toolInput: { query, page: context?.currentPage || 1 },
+      }
+    }
+  }
+
+  // 6. Replace Text Intent (e.g. "replace '2024' with '2026'")
   if (p.includes('replace') || p.includes('change')) {
     const replaceMatch = raw.match(/replace\s+["']?([^"']+)["']?\s+with\s+["']?([^"']+)["']?/i) ||
       raw.match(/change\s+["']?([^"']+)["']?\s+to\s+["']?([^"']+)["']?/i)
@@ -106,7 +125,31 @@ export function parseIntentFallback(prompt: string, context?: DocChatContext | n
     }
   }
 
-  // 6. Summarization Intent
+  // 7. Rotate Pages Intent
+  if (p.includes('rotate')) {
+    let degrees = 90
+    if (p.includes('180')) degrees = 180
+    else if (p.includes('270') || p.includes('counter') || p.includes('left') || p.includes('-90')) degrees = 270
+    const allPages = p.includes('all') || p.includes('every')
+    return {
+      type: 'tool',
+      toolName: 'rotate_pages',
+      toolInput: {
+        degrees,
+        ...(allPages ? {} : { pages: [context?.currentPage || 1] }),
+      },
+    }
+  }
+
+  // 8. Undo / Redo Intent
+  if (p === 'undo' || p.startsWith('undo ')) {
+    return { type: 'tool', toolName: 'undo', toolInput: {} }
+  }
+  if (p === 'redo' || p.startsWith('redo ')) {
+    return { type: 'tool', toolName: 'redo', toolInput: {} }
+  }
+
+  // 9. Summarization Intent
   if (p.includes('summarize') || p.includes('summary') || p.includes('overview') || p.includes('batao') || p.includes('points')) {
     const text = context?.currentPageText?.trim()
     const title = context?.title || 'Document'
@@ -132,9 +175,9 @@ export function parseIntentFallback(prompt: string, context?: DocChatContext | n
     }
   }
 
-  // 7. General Help / Default Fallback
+  // 10. General Help / Default Fallback
   return {
     type: 'text',
-    text: `I'm ready to help you edit **${context?.title || 'your document'}**! You can ask me to:\n- **Add Watermarks:** *"Add a red CONFIDENTIAL watermark on all pages"*\n- **Page Numbers:** *"Add page numbers at bottom center"*\n- **Highlight / Redact:** *"Highlight Invoice"* or *"Redact phone number"*\n- **Text Editing:** *"Replace '2024' with '2026'"*\n- **Summarize:** *"Summarize page 1"*`,
+    text: `I'm ready to help you edit **${context?.title || 'your document'}**! You can ask me to:\n- **Add Watermarks:** *"Add a red CONFIDENTIAL watermark on all pages"*\n- **Page Numbers:** *"Add page numbers at bottom center"*\n- **Highlight / Redact / Whiteout:** *"Highlight Invoice"*, *"Redact phone number"*, or *"Whiteout machine"*\n- **Text Editing:** *"Replace '2024' with '2026'"*\n- **Summarize:** *"Summarize page 1"*`,
   }
 }

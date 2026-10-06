@@ -13,7 +13,8 @@ function buildSystemPrompt(ctx?: DocChatContext | null): string {
 - ALWAYS act via tools. Never claim an edit was made unless the tool result says success.
 - Coordinates are PDF points at scale 1 with a TOP-LEFT origin (y grows downward). A US-Letter page is 612×792 pt, A4 is 595×842 pt — but always use the real page sizes from the context/overview below.
 - Prefer \`anchor\` positions over raw x/y when the user speaks vaguely ("top right", "neeche", "corner me").
-- Before replace_text / style_text / highlight_text / redact_text on text you have not seen, use find_text or get_page_text first so you target the right occurrence and page.
+- Before replace_text / style_text / highlight_text / redact_text / whiteout_text on text you have not seen, use find_text or get_page_text first so you target the right occurrence and page.
+- If the user asks to whiteout, erase, or cover text in white, call whiteout_text.
 - You have FULL control of the canvas: every element already on it (text boxes, shapes, highlights, watermarks, signatures, images…) can be restructured. Call list_elements to get element ids, then update_element (move/resize/recolor/rewrite), duplicate_element or delete_element with that id. Use this whenever the user wants to move, resize, restyle or clean up something that already exists instead of adding a new element.
 - If the user does not say which page, assume the current page for local edits; for watermarks/page numbers assume all pages.
 - Text inside the PDF can only be found/edited one page at a time; loop over pages when the user asks for a whole-document text operation.
@@ -55,13 +56,15 @@ export async function GET() {
 
 function createFallbackStream(action: FallbackAction): Response {
   const encoder = new TextEncoder()
+  const msgId = `msg_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`
+  const partId = `part_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`
   const stream = new ReadableStream({
     start(controller) {
-      controller.enqueue(encoder.encode('data: {"type":"start"}\n\n'))
+      controller.enqueue(encoder.encode(`data: {"type":"start","messageId":"${msgId}"}\n\n`))
       controller.enqueue(encoder.encode('data: {"type":"start-step"}\n\n'))
 
       if (action.type === 'tool' && action.toolName) {
-        const callId = `call_${Date.now()}`
+        const callId = `call_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`
         controller.enqueue(
           encoder.encode(
             `data: {"type":"tool-input-available","toolCallId":"${callId}","toolName":"${action.toolName}","input":${JSON.stringify(action.toolInput || {})}}\n\n`,
@@ -71,11 +74,11 @@ function createFallbackStream(action: FallbackAction): Response {
         controller.enqueue(encoder.encode('data: {"type":"finish","finishReason":"tool-calls"}\n\n'))
       } else {
         const text = action.text || 'Done.'
-        controller.enqueue(encoder.encode('data: {"type":"text-start","id":"0"}\n\n'))
+        controller.enqueue(encoder.encode(`data: {"type":"text-start","id":"${partId}"}\n\n`))
         controller.enqueue(
-          encoder.encode(`data: {"type":"text-delta","id":"0","delta":${JSON.stringify(text)}}\n\n`),
+          encoder.encode(`data: {"type":"text-delta","id":"${partId}","delta":${JSON.stringify(text)}}\n\n`),
         )
-        controller.enqueue(encoder.encode('data: {"type":"text-end","id":"0"}\n\n'))
+        controller.enqueue(encoder.encode(`data: {"type":"text-end","id":"${partId}"}\n\n`))
         controller.enqueue(encoder.encode('data: {"type":"finish-step"}\n\n'))
         controller.enqueue(encoder.encode('data: {"type":"finish","finishReason":"stop"}\n\n'))
       }
@@ -94,12 +97,14 @@ function createFallbackStream(action: FallbackAction): Response {
   })
 }
 
-function interceptErrorsWithFallback(response: Response, action: FallbackAction): Response {
+function interceptErrorsWithFallback(response: Response, action: FallbackAction, hasToolResult = false): Response {
   if (!response.body) return response
 
   const reader = response.body.getReader()
   const decoder = new TextDecoder()
   const encoder = new TextEncoder()
+  const msgId = `msg_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`
+  const partId = `part_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`
 
   const transformedStream = new ReadableStream({
     async pull(controller) {
@@ -115,8 +120,11 @@ function interceptErrorsWithFallback(response: Response, action: FallbackAction)
         // Check if stream emitted an error
         if (text.includes('data: {"type":"error"') || text.includes('"type":"error"')) {
           console.log('[docflow-ai] Intercepted stream error (503/429), streaming fallback action instead')
-          if (action.type === 'tool' && action.toolName) {
-            const callId = `call_${Date.now()}`
+          controller.enqueue(encoder.encode(`data: {"type":"start","messageId":"${msgId}"}\n\n`))
+          controller.enqueue(encoder.encode('data: {"type":"start-step"}\n\n'))
+
+          if (!hasToolResult && action.type === 'tool' && action.toolName) {
+            const callId = `call_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`
             controller.enqueue(
               encoder.encode(
                 `data: {"type":"tool-input-available","toolCallId":"${callId}","toolName":"${action.toolName}","input":${JSON.stringify(action.toolInput || {})}}\n\n`,
@@ -125,12 +133,12 @@ function interceptErrorsWithFallback(response: Response, action: FallbackAction)
             controller.enqueue(encoder.encode('data: {"type":"finish-step"}\n\n'))
             controller.enqueue(encoder.encode('data: {"type":"finish","finishReason":"tool-calls"}\n\n'))
           } else {
-            const reply = action.text || 'Action processed.'
-            controller.enqueue(encoder.encode('data: {"type":"text-start","id":"0"}\n\n'))
+            const reply = action.text || 'Action completed successfully on the document canvas ✓'
+            controller.enqueue(encoder.encode(`data: {"type":"text-start","id":"${partId}"}\n\n`))
             controller.enqueue(
-              encoder.encode(`data: {"type":"text-delta","id":"0","delta":${JSON.stringify(reply)}}\n\n`),
+              encoder.encode(`data: {"type":"text-delta","id":"${partId}","delta":${JSON.stringify(reply)}}\n\n`),
             )
-            controller.enqueue(encoder.encode('data: {"type":"text-end","id":"0"}\n\n'))
+            controller.enqueue(encoder.encode(`data: {"type":"text-end","id":"${partId}"}\n\n`))
             controller.enqueue(encoder.encode('data: {"type":"finish-step"}\n\n'))
             controller.enqueue(encoder.encode('data: {"type":"finish","finishReason":"stop"}\n\n'))
           }
@@ -169,17 +177,16 @@ export async function POST(req: Request) {
 
   // Check if last message was a tool result (follow-up)
   const lastMsg = messages[messages.length - 1]
-  const hasToolResult = lastMsg?.role === 'tool' || lastMsg?.parts?.some((p) => p.type.startsWith('tool-'))
-
-  if (hasToolResult) {
-    return createFallbackStream({
-      type: 'text',
-      text: 'Action completed successfully on the document canvas ✓',
-    })
-  }
+  const hasToolResult = ((lastMsg?.role as string) === 'tool') || lastMsg?.parts?.some((p) => p.type.startsWith('tool-'))
 
   // If no external model is configured, execute via smart fallback immediately
   if (chain.length === 0) {
+    if (hasToolResult) {
+      return createFallbackStream({
+        type: 'text',
+        text: 'Action completed successfully on the document canvas ✓',
+      })
+    }
     return createFallbackStream(fallbackAction)
   }
 
@@ -195,12 +202,19 @@ export async function POST(req: Request) {
     const rawResponse = result.toUIMessageStreamResponse({
       onError: (error) => {
         console.warn('[docflow-ai] Stream error, executing fallback:', error)
+        return 'An error occurred during response streaming.'
       },
     })
 
-    return interceptErrorsWithFallback(rawResponse, fallbackAction)
+    return interceptErrorsWithFallback(rawResponse, fallbackAction, hasToolResult)
   } catch (err) {
     console.warn('[docflow-ai] Model call failed, switching to smart fallback:', err)
+    if (hasToolResult) {
+      return createFallbackStream({
+        type: 'text',
+        text: 'Action completed successfully on the document canvas ✓',
+      })
+    }
     return createFallbackStream(fallbackAction)
   }
 }

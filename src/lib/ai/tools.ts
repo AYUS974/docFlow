@@ -112,6 +112,15 @@ export const aiTools = {
     inputSchema: z.object({ query: z.string().min(1), page }),
   }),
 
+  whiteout_text: tool({
+    description:
+      'Cover every occurrence of a text snippet on a page with an opaque white box (cleanly erasing or whiting out the text). Use for requests like "whiteout machine", "erase invoice", "white out the word draft".',
+    inputSchema: z.object({
+      query: z.string().min(1).describe('Text to whiteout (case-insensitive)'),
+      page,
+    }),
+  }),
+
   whiteout_area: tool({
     description: 'Cover a rectangular area of a page with white (hide content without a black box).',
     inputSchema: z.object({
@@ -303,6 +312,7 @@ export const AI_TOOL_LABELS: Record<AiToolName, string> = {
   add_text: 'Adding text',
   highlight_text: 'Highlighting',
   redact_text: 'Redacting',
+  whiteout_text: 'Whiting out text',
   whiteout_area: 'Applying whiteout',
   add_shape: 'Drawing shape',
   add_watermark: 'Adding watermark',

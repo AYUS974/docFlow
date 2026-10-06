@@ -60,6 +60,52 @@ async function ensurePageTextItems(page: number): Promise<PDFTextItem[]> {
   return useAppStore.getState().textItems.filter((i) => i.pageNumber === page)
 }
 
+let measureCtx: CanvasRenderingContext2D | null = null
+
+function getMeasureCtx(): CanvasRenderingContext2D | null {
+  if (typeof document === 'undefined') return null
+  if (!measureCtx) {
+    const c = document.createElement('canvas')
+    measureCtx = c.getContext('2d')
+  }
+  return measureCtx
+}
+
+function getSubstringBounds(item: PDFTextItem, startIndex: number, length: number): { x: number; y: number; width: number; height: number } {
+  const fullText = item.text || item.str || ''
+  const ctx = getMeasureCtx()
+  const fontSize = item.fontSize || 12
+  const fontFam = item.fontFamily || 'Helvetica, Arial, sans-serif'
+  const isBold = fontFam.toLowerCase().includes('bold') || false
+  const isItalic = fontFam.toLowerCase().includes('italic') || fontFam.toLowerCase().includes('oblique') || false
+  const fontStyle = `${isItalic ? 'italic ' : ''}${isBold ? 'bold ' : ''}${fontSize}px ${fontFam}, "Helvetica Neue", Helvetica, Arial, sans-serif`
+
+  let prefixW = 0
+  let matchW = 0
+  let totalW = 0
+
+  if (ctx) {
+    ctx.font = fontStyle
+    prefixW = ctx.measureText(fullText.slice(0, startIndex)).width
+    matchW = ctx.measureText(fullText.slice(startIndex, startIndex + length)).width
+    totalW = ctx.measureText(fullText).width
+  } else {
+    const avgChar = fontSize * 0.52
+    prefixW = startIndex * avgChar
+    matchW = length * avgChar
+    totalW = fullText.length * avgChar
+  }
+
+  // Scale accurately to match pdf.js rendered item.width
+  const scale = (item.width > 0 && totalW > 0) ? (item.width / totalW) : 1
+  const x = item.x + prefixW * scale
+  const width = Math.max(matchW * scale, 4)
+  const height = item.height || fontSize * 1.2
+  const y = item.y
+
+  return { x, y, width, height }
+}
+
 interface TextMatch {
   item: PDFTextItem
   /** Bounding box of the matched substring inside the item (points). */
@@ -70,26 +116,24 @@ interface TextMatch {
   startIndex: number
 }
 
-/** Find all case-insensitive occurrences of `query` inside a page's text items. */
+/** Find all case-insensitive occurrences of `query` inside a page's text items with precise sub-character bounds. */
 function findMatches(items: PDFTextItem[], query: string): TextMatch[] {
   const q = query.toLowerCase()
   const matches: TextMatch[] = []
   for (const item of items) {
-    const text = item.text
+    const text = item.text || item.str || ''
     const lower = text.toLowerCase()
     let from = 0
     while (true) {
       const idx = lower.indexOf(q, from)
       if (idx === -1) break
-      // Approximate the substring box proportionally — good enough for
-      // highlight/redact boxes over a single merged run.
-      const charW = text.length > 0 ? item.width / text.length : item.fontSize * 0.5
+      const bounds = getSubstringBounds(item, idx, query.length)
       matches.push({
         item,
-        x: item.x + idx * charW,
-        y: item.y,
-        width: Math.max(query.length * charW, 4),
-        height: item.height,
+        x: bounds.x,
+        y: bounds.y,
+        width: bounds.width,
+        height: bounds.height,
         startIndex: idx,
       })
       from = idx + q.length
@@ -341,8 +385,8 @@ async function highlightText({ query, page, color }: { query: string; page: numb
   const store = useAppStore.getState()
   store.addAnnotations(matches.map((m) => makeAnnotation({
     type: 'highlight', pageNumber: page,
-    x: m.x - 1, y: m.y - 1,
-    width: m.width + 2, height: m.height + 2,
+    x: Math.round(m.x - 2), y: Math.round(m.y - 1),
+    width: Math.round(m.width + 4), height: Math.round(m.height + 2),
     color: color ?? '#f59e0b',
   })))
   return ok(`Highlighted ${matches.length} occurrence(s) of "${query}" on page ${page}.`)
@@ -357,11 +401,27 @@ async function redactText({ query, page }: { query: string; page: number }): Pro
   const store = useAppStore.getState()
   store.addAnnotations(matches.map((m) => makeAnnotation({
     type: 'redact', pageNumber: page,
-    x: m.x - 1, y: m.y - 1,
-    width: m.width + 2, height: m.height + 2,
+    x: Math.round(m.x - 2), y: Math.round(m.y - 1),
+    width: Math.round(m.width + 4), height: Math.round(m.height + 2),
     color: '#000000',
   })))
   return ok(`Redacted ${matches.length} occurrence(s) of "${query}" on page ${page}.`)
+}
+
+async function whiteoutText({ query, page }: { query: string; page: number }): Promise<AiToolResult> {
+  const bad = assertPage(page)
+  if (bad) return fail(bad)
+  const items = await ensurePageTextItems(page)
+  const matches = findMatches(items, query)
+  if (matches.length === 0) return fail(`"${query}" not found on page ${page}.`)
+  const store = useAppStore.getState()
+  store.addAnnotations(matches.map((m) => makeAnnotation({
+    type: 'whiteout', pageNumber: page,
+    x: Math.round(m.x - 2), y: Math.round(m.y - 1),
+    width: Math.round(m.width + 4), height: Math.round(m.height + 2),
+    color: '#ffffff',
+  })))
+  return ok(`Whited out ${matches.length} occurrence(s) of "${query}" on page ${page}.`)
 }
 
 async function whiteoutArea({ page, x, y, width, height }: {
@@ -721,6 +781,7 @@ const HANDLERS: Record<AiToolName, (input: any) => Promise<AiToolResult>> = {
   add_text: addText,
   highlight_text: highlightText,
   redact_text: redactText,
+  whiteout_text: whiteoutText,
   whiteout_area: whiteoutArea,
   add_shape: addShape,
   add_watermark: addWatermark,

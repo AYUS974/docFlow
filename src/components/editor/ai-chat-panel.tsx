@@ -94,11 +94,16 @@ export function AiChatPanel() {
   const [input, setInput] = useState('')
   const scrollRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
+  const processedCallsRef = useRef<Set<string>>(new Set())
 
   const { messages, sendMessage, status, error, stop, setMessages, clearError, addToolOutput } = useChat({
     transport: new DefaultChatTransport({ api: '/api/ai/chat' }),
     sendAutomaticallyWhen: lastAssistantMessageIsCompleteWithToolCalls,
     onToolCall: async ({ toolCall }) => {
+      // Prevent duplicate executions of the same toolCallId
+      if (processedCallsRef.current.has(toolCall.toolCallId)) return
+      processedCallsRef.current.add(toolCall.toolCallId)
+
       // Every tool executes in the browser against the live editor store.
       const output = await executeAiTool(toolCall.toolName, toolCall.input)
       addToolOutput({
@@ -155,7 +160,7 @@ export function AiChatPanel() {
               <div className="flex items-center gap-0.5">
                 {messages.length > 0 && (
                   <Button variant="ghost" size="icon" className="h-7 w-7" title="Clear chat"
-                    onClick={() => { stop(); setMessages([]); clearError() }}>
+                    onClick={() => { stop(); setMessages([]); clearError(); processedCallsRef.current.clear() }}>
                     <Trash2 className="w-3.5 h-3.5" />
                   </Button>
                 )}
