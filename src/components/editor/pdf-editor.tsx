@@ -20,7 +20,7 @@ import {
   ArrowUpRight, Printer, Maximize2, Keyboard, FileDown, ImageIcon,
   XCircle, Pencil, EyeOff, PenLine, Stamp, Hand, Droplets, Crop,
   ImagePlus, Hash, Shield, FileOutput, Copy, Scissors, GripVertical,
-  MoveHorizontal, CheckCircle2, Loader2, Settings2, ScanText, Sparkles,
+  MoveHorizontal, CheckCircle2, Loader2, Settings2, ScanText, Sparkles, ChevronDown,
 } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import * as pdfjsLib from 'pdfjs-dist'
@@ -1544,31 +1544,195 @@ export function PdfEditor() {
         </Button>
         <Separator orientation="vertical" className="h-6" />
 
-        {/* Tool groups */}
-        <div className="flex items-center gap-0.5 overflow-x-auto">
-          {TOOL_GROUPS.map((group, gi) => (
-            <TooltipProvider key={group.label} delayDuration={300}>
-              {gi > 0 && <Separator key={`sep-${gi}`} orientation="vertical" className="h-6 mx-0.5" />}
-              {group.tools.map((tool) => (
-                <Tooltip key={tool.id}>
-                  <TooltipTrigger asChild>
-                    <Button
-                      variant={currentTool === tool.id ? 'secondary' : 'ghost'}
-                      size="icon" className="shrink-0 h-8 w-8"
-                      onClick={() => {
-                        if (tool.id === 'signature' && !signatureData) { setShowSignaturePad(true); return }
-                        if (tool.id === 'image' && !pendingImageData) { fileInputRef.current?.click(); return }
-                        setCurrentTool(tool.id)
-                      }}
-                    >
-                      <tool.icon className="w-4 h-4" />
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent side="bottom" className="text-xs">{tool.label} ({tool.shortcut})</TooltipContent>
-                </Tooltip>
-              ))}
-            </TooltipProvider>
-          ))}
+        {/* Pointer & Pan Selector */}
+        <div className="flex items-center rounded-lg border border-border/60 p-0.5 bg-muted/40 shrink-0">
+          <TooltipProvider delayDuration={300}>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant={currentTool === 'select' ? 'secondary' : 'ghost'}
+                  size="icon" className="h-7 w-7 rounded-md"
+                  onClick={() => setCurrentTool('select')}
+                >
+                  <MousePointer2 className="w-3.5 h-3.5" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom" className="text-xs">Select / Move (V)</TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant={currentTool === 'pan' ? 'secondary' : 'ghost'}
+                  size="icon" className="h-7 w-7 rounded-md"
+                  onClick={() => setCurrentTool('pan')}
+                >
+                  <Hand className="w-3.5 h-3.5" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom" className="text-xs">Pan / Move Canvas (H)</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+        </div>
+        <Separator orientation="vertical" className="h-6" />
+
+        {/* Primary Editing & Annotation Tools */}
+        <div className="flex items-center gap-1 shrink-0">
+          <TooltipProvider delayDuration={300}>
+            {/* Edit Text - Featured */}
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant={currentTool === 'editText' ? 'default' : 'ghost'}
+                  size="sm"
+                  className={`h-8 gap-1.5 px-2.5 text-xs font-medium ${currentTool === 'editText' ? 'bg-blue-600 hover:bg-blue-700 text-white shadow-sm' : ''}`}
+                  onClick={() => setCurrentTool('editText')}
+                >
+                  <Pencil className="w-3.5 h-3.5" />
+                  <span>Edit Text</span>
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom" className="text-xs">Click existing PDF text to edit (E)</TooltipContent>
+            </Tooltip>
+
+            {/* Highlight */}
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant={currentTool === 'highlight' ? 'secondary' : 'ghost'}
+                  size="icon" className="h-8 w-8"
+                  onClick={() => setCurrentTool('highlight')}
+                >
+                  <Highlighter className="w-4 h-4 text-amber-500" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom" className="text-xs">Highlight text (A)</TooltipContent>
+            </Tooltip>
+
+            {/* Add Text */}
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant={currentTool === 'text' ? 'secondary' : 'ghost'}
+                  size="icon" className="h-8 w-8"
+                  onClick={() => setCurrentTool('text')}
+                >
+                  <Type className="w-4 h-4" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom" className="text-xs">Insert new text box (T)</TooltipContent>
+            </Tooltip>
+
+            {/* Draw / Pen */}
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant={currentTool === 'draw' ? 'secondary' : 'ghost'}
+                  size="icon" className="h-8 w-8"
+                  onClick={() => setCurrentTool('draw')}
+                >
+                  <PenTool className="w-4 h-4" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom" className="text-xs">Freehand draw / Pen (D)</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+
+          {/* Shapes Dropdown */}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant={['rectangle', 'ellipse', 'line'].includes(currentTool) ? 'secondary' : 'ghost'}
+                size="sm"
+                className="h-8 gap-1 px-2 text-xs font-medium"
+              >
+                {currentTool === 'ellipse' ? <Circle className="w-3.5 h-3.5" /> : currentTool === 'line' ? <ArrowUpRight className="w-3.5 h-3.5" /> : <Square className="w-3.5 h-3.5" />}
+                <span>Shapes</span>
+                <ChevronDown className="w-3 h-3 opacity-60" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="w-44">
+              <DropdownMenuItem onClick={() => setCurrentTool('rectangle')} className="gap-2 cursor-pointer">
+                <Square className="w-4 h-4" /><span>Rectangle</span><kbd className="ml-auto text-[10px] text-muted-foreground font-mono">R</kbd>
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => setCurrentTool('ellipse')} className="gap-2 cursor-pointer">
+                <Circle className="w-4 h-4" /><span>Circle / Oval</span><kbd className="ml-auto text-[10px] text-muted-foreground font-mono">O</kbd>
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => setCurrentTool('line')} className="gap-2 cursor-pointer">
+                <ArrowUpRight className="w-4 h-4" /><span>Arrow / Line</span><kbd className="ml-auto text-[10px] text-muted-foreground font-mono">L</kbd>
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+
+          {/* Erase & Redact Dropdown */}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant={['whiteout', 'redact', 'eraser'].includes(currentTool) ? 'secondary' : 'ghost'}
+                size="sm"
+                className="h-8 gap-1 px-2 text-xs font-medium"
+              >
+                {currentTool === 'redact' ? <EyeOff className="w-3.5 h-3.5 text-red-500" /> : currentTool === 'eraser' ? <Eraser className="w-3.5 h-3.5 text-amber-500" /> : <PenLine className="w-3.5 h-3.5" />}
+                <span>Erase</span>
+                <ChevronDown className="w-3 h-3 opacity-60" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="w-60">
+              <DropdownMenuItem onClick={() => setCurrentTool('whiteout')} className="gap-2 cursor-pointer">
+                <PenLine className="w-4 h-4 text-gray-500" />
+                <div className="flex flex-col"><span className="font-medium text-xs">Whiteout (Erase)</span><span className="text-[10px] text-muted-foreground">Clean white box to hide text</span></div>
+                <kbd className="ml-auto text-[10px] text-muted-foreground font-mono">W</kbd>
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => setCurrentTool('redact')} className="gap-2 cursor-pointer">
+                <EyeOff className="w-4 h-4 text-red-500" />
+                <div className="flex flex-col"><span className="font-medium text-xs">Blackout Redact</span><span className="text-[10px] text-muted-foreground">Permanent black security bar</span></div>
+                <kbd className="ml-auto text-[10px] text-muted-foreground font-mono">X</kbd>
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onClick={() => setCurrentTool('eraser')} className="gap-2 cursor-pointer">
+                <Eraser className="w-4 h-4 text-amber-500" />
+                <div className="flex flex-col"><span className="font-medium text-xs">Annotation Eraser</span><span className="text-[10px] text-muted-foreground">Click shapes/drawings to delete</span></div>
+                <kbd className="ml-auto text-[10px] text-muted-foreground font-mono">Z</kbd>
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+
+          {/* Insert Dropdown (Signature & Image) */}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant={['signature', 'image'].includes(currentTool) ? 'secondary' : 'ghost'}
+                size="sm"
+                className="h-8 gap-1 px-2 text-xs font-medium"
+              >
+                {currentTool === 'image' ? <ImagePlus className="w-3.5 h-3.5" /> : <Stamp className="w-3.5 h-3.5" />}
+                <span>Insert</span>
+                <ChevronDown className="w-3 h-3 opacity-60" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="w-52">
+              <DropdownMenuItem
+                onClick={() => {
+                  if (!signatureData) { setShowSignaturePad(true); return }
+                  setCurrentTool('signature')
+                }}
+                className="gap-2 cursor-pointer"
+              >
+                <Stamp className="w-4 h-4 text-purple-500" />
+                <div className="flex flex-col"><span className="font-medium text-xs">Signature</span><span className="text-[10px] text-muted-foreground">Draw or place signature</span></div>
+                <kbd className="ml-auto text-[10px] text-muted-foreground font-mono">S</kbd>
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onClick={() => {
+                  fileInputRef.current?.click()
+                }}
+                className="gap-2 cursor-pointer"
+              >
+                <ImagePlus className="w-4 h-4 text-cyan-500" />
+                <div className="flex flex-col"><span className="font-medium text-xs">Image / Stamp</span><span className="text-[10px] text-muted-foreground">Upload and place PNG/JPG</span></div>
+                <kbd className="ml-auto text-[10px] text-muted-foreground font-mono">I</kbd>
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
         <Separator orientation="vertical" className="h-6" />
 
@@ -1968,6 +2132,100 @@ export function PdfEditor() {
         {totalAnnotations > 0 && <span className="text-xs bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300 px-2 py-0.5 rounded-full ml-1 hidden sm:inline">{totalAnnotations} annot.</span>}
         {textEdits.size > 0 && <span className="text-xs bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 px-2 py-0.5 rounded-full ml-1 hidden sm:inline">{textEdits.size} text edit{textEdits.size !== 1 ? 's' : ''}</span>}
       </div>
+
+      {/* ===== CONTEXTUAL TOOL HELPER BANNER ===== */}
+      {currentTool !== 'select' && (
+        <div className="bg-muted/70 border-b border-border/50 px-4 py-1.5 flex items-center justify-between text-xs transition-all shrink-0 z-20">
+          <div className="flex items-center gap-2">
+            {currentTool === 'editText' && (
+              <span className="flex items-center gap-2 text-blue-700 dark:text-blue-300">
+                <Pencil className="w-3.5 h-3.5 shrink-0" />
+                <span><strong className="font-semibold">Edit Text Mode:</strong> Click any word or line on the PDF canvas to edit it directly.</span>
+              </span>
+            )}
+            {currentTool === 'highlight' && (
+              <span className="flex items-center gap-2 text-amber-700 dark:text-amber-300">
+                <Highlighter className="w-3.5 h-3.5 shrink-0" />
+                <span><strong className="font-semibold">Highlight Mode:</strong> Click and drag across any text to highlight it.</span>
+              </span>
+            )}
+            {currentTool === 'text' && (
+              <span className="flex items-center gap-2 text-emerald-700 dark:text-emerald-300">
+                <Type className="w-3.5 h-3.5 shrink-0" />
+                <span><strong className="font-semibold">Add Text:</strong> Click anywhere on the page to insert a new text box.</span>
+              </span>
+            )}
+            {currentTool === 'draw' && (
+              <span className="flex items-center gap-2 text-foreground/90">
+                <PenTool className="w-3.5 h-3.5 shrink-0" />
+                <span><strong className="font-semibold">Freehand Pen:</strong> Click and drag to sketch or write notes.</span>
+              </span>
+            )}
+            {currentTool === 'rectangle' && (
+              <span className="flex items-center gap-2 text-foreground/90">
+                <Square className="w-3.5 h-3.5 shrink-0" />
+                <span><strong className="font-semibold">Rectangle:</strong> Click and drag to draw a box.</span>
+              </span>
+            )}
+            {currentTool === 'ellipse' && (
+              <span className="flex items-center gap-2 text-foreground/90">
+                <Circle className="w-3.5 h-3.5 shrink-0" />
+                <span><strong className="font-semibold">Circle / Oval:</strong> Click and drag to draw an ellipse.</span>
+              </span>
+            )}
+            {currentTool === 'line' && (
+              <span className="flex items-center gap-2 text-foreground/90">
+                <ArrowUpRight className="w-3.5 h-3.5 shrink-0" />
+                <span><strong className="font-semibold">Arrow / Line:</strong> Click and drag to point an arrow.</span>
+              </span>
+            )}
+            {currentTool === 'whiteout' && (
+              <span className="flex items-center gap-2 text-gray-800 dark:text-gray-200">
+                <PenLine className="w-3.5 h-3.5 shrink-0" />
+                <span><strong className="font-semibold">Whiteout Erase:</strong> Drag a box over any text to erase it cleanly with white.</span>
+              </span>
+            )}
+            {currentTool === 'redact' && (
+              <span className="flex items-center gap-2 text-red-700 dark:text-red-300">
+                <EyeOff className="w-3.5 h-3.5 shrink-0" />
+                <span><strong className="font-semibold">Blackout Redact:</strong> Drag a box over sensitive information to redact permanently.</span>
+              </span>
+            )}
+            {currentTool === 'eraser' && (
+              <span className="flex items-center gap-2 text-amber-700 dark:text-amber-300">
+                <Eraser className="w-3.5 h-3.5 shrink-0" />
+                <span><strong className="font-semibold">Eraser:</strong> Click any drawn shape, line, or highlight to remove it.</span>
+              </span>
+            )}
+            {currentTool === 'signature' && (
+              <span className="flex items-center gap-2 text-purple-700 dark:text-purple-300">
+                <Stamp className="w-3.5 h-3.5 shrink-0" />
+                <span><strong className="font-semibold">Place Signature:</strong> Click anywhere on the page to drop your signature.</span>
+              </span>
+            )}
+            {currentTool === 'image' && (
+              <span className="flex items-center gap-2 text-cyan-700 dark:text-cyan-300">
+                <ImagePlus className="w-3.5 h-3.5 shrink-0" />
+                <span><strong className="font-semibold">Place Image:</strong> Click anywhere on the page to place your image stamp.</span>
+              </span>
+            )}
+            {currentTool === 'pan' && (
+              <span className="flex items-center gap-2 text-amber-700 dark:text-amber-300">
+                <Hand className="w-3.5 h-3.5 shrink-0" />
+                <span><strong className="font-semibold">Pan Canvas:</strong> Click and drag to smoothly scroll/pan across the page.</span>
+              </span>
+            )}
+          </div>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-6 px-2 text-[11px] font-medium text-muted-foreground hover:text-foreground hover:bg-muted"
+            onClick={() => setCurrentTool('select')}
+          >
+            Exit Tool (Esc / V)
+          </Button>
+        </div>
+      )}
 
       {/* ===== MAIN CONTENT ===== */}
       <div className="flex-1 flex overflow-hidden relative">
