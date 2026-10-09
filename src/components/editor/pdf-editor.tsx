@@ -21,7 +21,7 @@ import {
   XCircle, Pencil, EyeOff, PenLine, Stamp, Hand, Droplets, Crop,
   ImagePlus, Hash, Shield, FileOutput, Copy, Scissors, GripVertical,
   MoveHorizontal, CheckCircle2, Loader2, Settings2, ScanText, Sparkles, ChevronDown,
-  Eye, Calendar, Check, ScrollText, BookOpen,
+  Eye, Calendar, Check, ScrollText, BookOpen, Search,
 } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import * as pdfjsLib from 'pdfjs-dist'
@@ -31,6 +31,9 @@ import { TextLayer } from './text-layer'
 import { SignaturePad } from './signature-pad'
 import { PageManager } from './page-manager'
 import { AiChatPanel } from './ai-chat-panel'
+import { PdfSearchBar, type SearchMatch } from './pdf-search-bar'
+import { PdfContextMenu, type ContextMenuState } from './pdf-context-menu'
+import { PdfThumbnailStrip } from './pdf-thumbnail-strip'
 import { Slider } from '@/components/ui/slider'
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdf-worker/pdf.worker.min.mjs'
@@ -98,6 +101,7 @@ export function PdfEditor() {
     savedSignatures, addSavedSignature,
     insertBlankPage, duplicatePage,
     updateDocument, updateAnnotation,
+    bringToFront, sendToBack, removeAnnotationsByIds,
     saveToUndoStack,
   } = useAppStore()
 
@@ -160,6 +164,17 @@ export function PdfEditor() {
   const [annotSizeDropdownId, setAnnotSizeDropdownId] = useState<string | null>(null)
   const [annotColorDropdownId, setAnnotColorDropdownId] = useState<string | null>(null)
   const [isMobile, setIsMobile] = useState(false)
+  const [showSearch, setShowSearch] = useState(false)
+  const [searchMatches, setSearchMatches] = useState<SearchMatch[]>([])
+  const [activeSearchMatchIndex, setActiveSearchMatchIndex] = useState(0)
+  const [contextMenu, setContextMenu] = useState<ContextMenuState>({
+    visible: false,
+    x: 0,
+    y: 0,
+    pageNumber: 1,
+    canvasCoords: { x: 0, y: 0 },
+  })
+  const [showThumbnailStrip, setShowThumbnailStrip] = useState(false)
   
   // High-level editor modes: 'view' | 'annotate' | 'edit' | 'sign'
   type EditorMode = 'view' | 'annotate' | 'edit' | 'sign'
@@ -1602,28 +1617,126 @@ export function PdfEditor() {
       if (e.key === '+' || e.key === '=') setZoom(zoom + 0.1)
       if (e.key === '-') setZoom(zoom - 0.1)
       if (e.key === '0' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); setZoom(1) }
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') {
+        e.preventDefault()
+        setShowSearch((prev) => !prev)
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'd' && selectedAnnotId) {
+        e.preventDefault()
+        const annot = annotations.find(a => a.id === selectedAnnotId)
+        if (annot) handleDuplicateAnnot(annot)
+      }
       if (e.key === 'PageDown' || ((e.key === 'ArrowRight' || e.key === 'ArrowDown') && (e.altKey || currentTool === 'select' || currentTool === 'pan'))) {
         if (currentPage < totalPages) {
           e.preventDefault()
-          setCurrentPage(currentPage + 1)
-          if (containerRef.current) containerRef.current.scrollTop = 0
+          handlePageSelect(currentPage + 1)
         }
       }
       if (e.key === 'PageUp' || ((e.key === 'ArrowLeft' || e.key === 'ArrowUp') && (e.altKey || currentTool === 'select' || currentTool === 'pan'))) {
         if (currentPage > 1) {
           e.preventDefault()
-          setCurrentPage(currentPage - 1)
-          if (containerRef.current) containerRef.current.scrollTop = 0
+          handlePageSelect(currentPage - 1)
         }
       }
       if (e.key === '?') setShowShortcuts(true)
-      if (e.key === 'Delete' && currentTool === 'select') {
-        // Future: delete selected annotation
+      if (e.key === 'Delete' && selectedAnnotId) {
+        saveToUndoStack()
+        removeAnnotation(selectedAnnotId)
+        setSelectedAnnotId(null)
+        showStatus('Annotation deleted')
       }
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [setCurrentTool, goBack, setZoom, zoom, undo, redo, textInput.visible, editingTextItem, setEditingTextItem, isCropping, setCropping, currentTool, currentPage, totalPages, setCurrentPage])
+  }, [setCurrentTool, goBack, setZoom, zoom, undo, redo, textInput.visible, editingTextItem, setEditingTextItem, isCropping, setCropping, currentTool, currentPage, totalPages, setCurrentPage, selectedAnnotId, annotations, removeAnnotation])
+
+  const handleContextMenu = (e: React.MouseEvent, pageNum: number) => {
+    e.preventDefault()
+    e.stopPropagation()
+    const coords = getCanvasCoords(e, pageNum)
+    const pageAnnots = annotations.filter((a) => a.pageNumber === pageNum)
+    let clickedAnnot: PDFAnnotation | null = null
+
+    for (let i = pageAnnots.length - 1; i >= 0; i--) {
+      const annot = pageAnnots[i]
+      let hit = false
+      let x = annot.x, y = annot.y, w = annot.width || 100, h = annot.height || 50
+      if (annot.type === 'draw' && annot.points && annot.points.length > 0) {
+        const xs = annot.points.map(p => p.x)
+        const ys = annot.points.map(p => p.y)
+        const minX = Math.min(...xs), maxX = Math.max(...xs)
+        const minY = Math.min(...ys), maxY = Math.max(...ys)
+        x = minX; y = minY; w = maxX - minX; h = maxY - minY
+      }
+      if (coords.x >= x && coords.x <= x + w && coords.y >= y && coords.y <= y + h) {
+        hit = true
+        clickedAnnot = annot
+        setSelectedAnnotId(annot.id)
+        break
+      }
+    }
+
+    setContextMenu({
+      visible: true,
+      x: e.clientX,
+      y: e.clientY,
+      annot: clickedAnnot,
+      pageNumber: pageNum,
+      canvasCoords: coords,
+    })
+  }
+
+  const handleDuplicateAnnot = (annot: PDFAnnotation) => {
+    const newId = crypto.randomUUID()
+    addAnnotation({
+      ...annot,
+      id: newId,
+      x: annot.x + 15,
+      y: annot.y + 15,
+    })
+    setSelectedAnnotId(newId)
+    showStatus('Annotation duplicated')
+  }
+
+  const handleAddTextAt = (coords: { x: number; y: number }, pageNumber: number) => {
+    const newId = crypto.randomUUID()
+    addAnnotation({
+      id: newId,
+      type: 'text',
+      pageNumber,
+      x: coords.x,
+      y: coords.y,
+      content: 'Type text...',
+      fontSize,
+      fontFamily,
+      color: drawColor,
+    })
+    setSelectedAnnotId(newId)
+    setEditingAnnotId(newId)
+    setCurrentTool('select')
+  }
+
+  const handleAddDateAt = (coords: { x: number; y: number }, pageNumber: number) => {
+    const today = new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+    const newId = crypto.randomUUID()
+    addAnnotation({
+      id: newId,
+      type: 'text',
+      pageNumber,
+      x: coords.x,
+      y: coords.y,
+      content: today,
+      fontSize: 14,
+      fontFamily: 'Helvetica',
+      color: '#000000',
+    })
+    setSelectedAnnotId(newId)
+    showStatus('Date stamp added')
+  }
+
+  const handleJumpToMatch = (match: SearchMatch) => {
+    handlePageSelect(match.pageNumber)
+  }
 
   const selectedAnnot = selectedAnnotId ? annotations.find(a => a.id === selectedAnnotId) : null
   const pageAnnotations = annotations.filter((a) => a.pageNumber === currentPage)
@@ -1715,6 +1828,20 @@ export function PdfEditor() {
           </TooltipProvider>
 
           <Separator orientation="vertical" className="h-5" />
+
+          {/* Document Search Button */}
+          <TooltipProvider delayDuration={300}>
+            <Tooltip><TooltipTrigger asChild>
+              <Button
+                variant={showSearch ? 'secondary' : 'ghost'}
+                size="icon"
+                className={`shrink-0 h-8 w-8 rounded-full ${showSearch ? 'bg-amber-100 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300' : ''}`}
+                onClick={() => setShowSearch(!showSearch)}
+              >
+                <Search className="w-3.5 h-3.5" />
+              </Button>
+            </TooltipTrigger><TooltipContent side="bottom" className="text-xs">Find in Document (Ctrl+F)</TooltipContent></Tooltip>
+          </TooltipProvider>
 
           {/* Sidebar drawer toggle */}
           <TooltipProvider delayDuration={300}>
@@ -1864,6 +1991,9 @@ export function PdfEditor() {
         </div>
 
         <div className="flex items-center gap-1 shrink-0">
+          <Button variant="ghost" size="icon" className={`h-8 w-8 rounded-full ${showSearch ? 'bg-muted' : ''}`} onClick={() => setShowSearch(!showSearch)}>
+            <Search className="w-4 h-4" />
+          </Button>
           <Button variant="ghost" size="icon" className={`h-8 w-8 rounded-full ${showAiPanel ? 'bg-emerald-100 dark:bg-emerald-900/40 text-emerald-600' : ''}`} onClick={toggleAiPanel}>
             <Sparkles className="w-4 h-4" />
           </Button>
@@ -2268,10 +2398,33 @@ export function PdfEditor() {
                       onMouseLeave={() => { if (isPanning) handlePanEnd(); else handlePointerUp({} as any, pageNum) }}
                       onClick={(e) => handleCanvasClick(e, pageNum)}
                       onDoubleClick={handleCanvasDoubleClick}
+                      onContextMenu={(e) => handleContextMenu(e, pageNum)}
                       onTouchStart={(e) => handlePointerDown(e, pageNum)}
                       onTouchMove={(e) => handlePointerMove(e, pageNum)}
                       onTouchEnd={(e) => handlePointerUp(e, pageNum)}
                     />
+                    {/* Search match highlights for this page */}
+                    {searchMatches
+                      .filter((m) => m.pageNumber === pageNum)
+                      .map((match) => {
+                        const isActive = searchMatches[activeSearchMatchIndex]?.id === match.id
+                        return (
+                          <div
+                            key={match.id}
+                            className={`absolute rounded pointer-events-none transition-all ${
+                              isActive
+                                ? 'bg-emerald-500/50 border-2 border-emerald-500 shadow-md ring-4 ring-emerald-400/40 z-30 animate-pulse'
+                                : 'bg-amber-400/40 border border-amber-500/70 z-20'
+                            }`}
+                            style={{
+                              left: match.x * zoom * 1.5,
+                              top: match.y * zoom * 1.5,
+                              width: match.width * zoom * 1.5,
+                              height: match.height * zoom * 1.5,
+                            }}
+                          />
+                        )
+                      })}
                     {/* Native text editing layer */}
                     {isCurrent && (
                       <TextLayer pdfDoc={pdfDocRef.current} canvasEl={canvasRefs.current[pageNum]} containerEl={containerRef.current} />
@@ -2824,9 +2977,29 @@ export function PdfEditor() {
             >
               <ChevronLeft className="w-3.5 h-3.5" />
             </Button>
-            <span className="text-xs font-medium px-1 whitespace-nowrap shrink-0">
-              Page <span className="font-semibold text-foreground">{currentPage}</span> of {totalPages}
-            </span>
+            <div
+              className="relative shrink-0"
+              onMouseEnter={() => setShowThumbnailStrip(true)}
+              onMouseLeave={() => setShowThumbnailStrip(false)}
+            >
+              <button
+                type="button"
+                onClick={() => setShowThumbnailStrip(!showThumbnailStrip)}
+                className="text-xs font-medium px-1.5 py-0.5 rounded-full hover:bg-muted/80 transition-colors cursor-pointer flex items-center gap-1"
+                title="Click or hover to preview page thumbnails"
+              >
+                Page <span className="font-semibold text-foreground">{currentPage}</span> of {totalPages}
+              </button>
+              <PdfThumbnailStrip
+                isOpen={showThumbnailStrip}
+                thumbnails={pageThumbnails}
+                currentPage={currentPage}
+                onSelectPage={(p) => {
+                  handlePageSelect(p)
+                  setShowThumbnailStrip(false)
+                }}
+              />
+            </div>
             <Button
               variant="ghost"
               size="icon"
@@ -3116,6 +3289,47 @@ export function PdfEditor() {
           </motion.div>
         )}
       </AnimatePresence>
+
+      {/* In-Editor Document Search Bar */}
+      <PdfSearchBar
+        pdfDoc={pdfDocRef.current}
+        isOpen={showSearch}
+        onClose={() => setShowSearch(false)}
+        onJumpToMatch={handleJumpToMatch}
+        onMatchesChange={(matches, activeIdx) => {
+          setSearchMatches(matches)
+          setActiveSearchMatchIndex(activeIdx)
+        }}
+      />
+
+      {/* Right-Click Context Menu */}
+      <PdfContextMenu
+        state={contextMenu}
+        onClose={() => setContextMenu((prev) => ({ ...prev, visible: false }))}
+        onDuplicate={handleDuplicateAnnot}
+        onDelete={(id) => {
+          saveToUndoStack()
+          removeAnnotation(id)
+          setSelectedAnnotId(null)
+          showStatus('Annotation deleted')
+        }}
+        onBringToFront={(id) => {
+          bringToFront(id)
+          showStatus('Brought to front')
+        }}
+        onSendToBack={(id) => {
+          sendToBack(id)
+          showStatus('Sent to back')
+        }}
+        onChangeColor={(id, color) => {
+          updateAnnotation(id, { color })
+          showStatus('Color updated')
+        }}
+        onAddTextAt={handleAddTextAt}
+        onAddDateAt={handleAddDateAt}
+        onApplyRedaction={handleApplyRedaction}
+        onOpenSearch={() => setShowSearch(true)}
+      />
 
       {/* Signature Pad Dialog */}
       <SignaturePad />

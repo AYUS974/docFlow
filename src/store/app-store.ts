@@ -183,6 +183,9 @@ interface AppState {
   removeAnnotation: (id: string) => void
   clearAnnotations: () => void
   updateAnnotation: (id: string, updates: Partial<PDFAnnotation>) => void
+  bringToFront: (id: string) => void
+  sendToBack: (id: string) => void
+  removeAnnotationsByIds: (ids: string[]) => void
   undo: () => void
   redo: () => void
   canUndo: boolean
@@ -492,6 +495,40 @@ export const useAppStore = create<AppState>()(
       a.id === id ? { ...a, ...updates } : a
     ),
   })),
+  bringToFront: (id) => set((state) => {
+    const item = state.annotations.find((a) => a.id === id)
+    if (!item) return state
+    return {
+      annotations: [...state.annotations.filter((a) => a.id !== id), item],
+      _undoStack: [...state._undoStack, state.annotations],
+      _redoStack: [],
+      canUndo: true,
+      canRedo: false,
+    }
+  }),
+  sendToBack: (id) => set((state) => {
+    const item = state.annotations.find((a) => a.id === id)
+    if (!item) return state
+    return {
+      annotations: [item, ...state.annotations.filter((a) => a.id !== id)],
+      _undoStack: [...state._undoStack, state.annotations],
+      _redoStack: [],
+      canUndo: true,
+      canRedo: false,
+    }
+  }),
+  removeAnnotationsByIds: (ids) => set((state) => {
+    const idSet = new Set(ids)
+    const remaining = state.annotations.filter((a) => !idSet.has(a.id))
+    if (remaining.length === state.annotations.length) return state
+    return {
+      annotations: remaining,
+      _undoStack: [...state._undoStack, state.annotations],
+      _redoStack: [],
+      canUndo: true,
+      canRedo: false,
+    }
+  }),
   undo: () => set((state) => {
     if (state._undoStack.length === 0) return state
     const prev = state._undoStack[state._undoStack.length - 1]
