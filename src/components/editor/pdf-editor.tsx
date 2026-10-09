@@ -21,6 +21,7 @@ import {
   XCircle, Pencil, EyeOff, PenLine, Stamp, Hand, Droplets, Crop,
   ImagePlus, Hash, Shield, FileOutput, Copy, Scissors, GripVertical,
   MoveHorizontal, CheckCircle2, Loader2, Settings2, ScanText, Sparkles, ChevronDown,
+  Eye, Calendar, Check,
 } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import * as pdfjsLib from 'pdfjs-dist'
@@ -143,6 +144,62 @@ export function PdfEditor() {
   const [annotSizeDropdownId, setAnnotSizeDropdownId] = useState<string | null>(null)
   const [annotColorDropdownId, setAnnotColorDropdownId] = useState<string | null>(null)
   const [isMobile, setIsMobile] = useState(false)
+  
+  // High-level editor modes: 'view' | 'annotate' | 'edit' | 'sign'
+  type EditorMode = 'view' | 'annotate' | 'edit' | 'sign'
+  const [editorMode, setEditorMode] = useState<EditorMode>('annotate')
+
+  const handleModeChange = (mode: EditorMode) => {
+    setEditorMode(mode)
+    if (mode === 'view') {
+      setCurrentTool('select')
+    } else if (mode === 'annotate') {
+      if (!['highlight', 'text', 'draw', 'rectangle', 'ellipse', 'line', 'eraser'].includes(currentTool)) {
+        setCurrentTool('highlight')
+      }
+    } else if (mode === 'edit') {
+      if (!['editText', 'whiteout', 'redact'].includes(currentTool)) {
+        setCurrentTool('editText')
+      }
+    } else if (mode === 'sign') {
+      if (!['signature', 'image'].includes(currentTool)) {
+        if (!signatureData) {
+          setShowSignaturePad(true)
+        }
+        setCurrentTool('signature')
+      }
+    }
+  }
+
+  // Keep editorMode in sync when tools are chosen via keyboard shortcuts / AI
+  useEffect(() => {
+    if (['editText', 'whiteout', 'redact'].includes(currentTool)) {
+      setEditorMode('edit')
+    } else if (['signature', 'image'].includes(currentTool)) {
+      setEditorMode('sign')
+    } else if (['highlight', 'text', 'draw', 'rectangle', 'ellipse', 'line', 'eraser'].includes(currentTool)) {
+      setEditorMode('annotate')
+    }
+  }, [currentTool])
+
+  const handleInsertDateStamp = () => {
+    const today = new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+    const newId = crypto.randomUUID()
+    addAnnotation({
+      id: newId,
+      type: 'text',
+      pageNumber: currentPage,
+      x: 120,
+      y: 120,
+      content: today,
+      color: '#000000',
+      fontSize: 14,
+      fontFamily: 'Helvetica',
+    })
+    setSelectedAnnotId(newId)
+    showStatus('Date stamp added')
+  }
+
   useEffect(() => {
     const checkMobile = () => setIsMobile(window.innerWidth < 768)
     checkMobile()
@@ -1519,713 +1576,238 @@ export function PdfEditor() {
       {/* Hidden file input for image uploads (accessible by all layout modes) */}
       <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handleImageUpload} />
 
-      {/* ===== TOP TOOLBAR (Desktop) ===== */}
-      <div className="hidden md:flex items-center gap-1 px-2 py-1.5 border-b border-border/60 bg-background shrink-0">
-        {/* Back */}
-        <Button variant="ghost" size="icon" className="shrink-0 h-8 w-8" onClick={() => setView('dashboard')}>
-          <ArrowLeft className="w-4 h-4" />
-        </Button>
-        <Separator orientation="vertical" className="h-6" />
-
-        {/* Undo / Redo */}
-        <TooltipProvider delayDuration={300}>
-          <Tooltip><TooltipTrigger asChild>
-            <Button variant="ghost" size="icon" className="shrink-0 h-8 w-8" disabled={!canUndo} onClick={undo}><Undo2 className="w-4 h-4" /></Button>
-          </TooltipTrigger><TooltipContent side="bottom" className="text-xs">Undo (Ctrl+Z)</TooltipContent></Tooltip>
-          <Tooltip><TooltipTrigger asChild>
-            <Button variant="ghost" size="icon" className="shrink-0 h-8 w-8" disabled={!canRedo} onClick={redo}><Redo2 className="w-4 h-4" /></Button>
-          </TooltipTrigger><TooltipContent side="bottom" className="text-xs">Redo (Ctrl+Shift+Z)</TooltipContent></Tooltip>
-        </TooltipProvider>
-        <Separator orientation="vertical" className="h-6" />
-
-        {/* Sidebar toggle */}
-        <Button variant="ghost" size="icon" className="shrink-0 h-8 w-8" onClick={toggleSidebar}>
-          {showSidebar ? <PanelLeftClose className="w-4 h-4" /> : <PanelLeftOpen className="w-4 h-4" />}
-        </Button>
-        <Separator orientation="vertical" className="h-6" />
-
-        {/* Pointer & Pan Selector */}
-        <div className="flex items-center rounded-lg border border-border/60 p-0.5 bg-muted/40 shrink-0">
+      {/* ===== MINIMAL TOP BAR (Desktop) ===== */}
+      <div className="hidden md:flex items-center justify-between px-3.5 py-2 border-b border-border/60 bg-background/95 backdrop-blur-md shrink-0 select-none z-20">
+        {/* Left: Back + Doc Title + Status */}
+        <div className="flex items-center gap-2.5 min-w-0">
           <TooltipProvider delayDuration={300}>
             <Tooltip>
               <TooltipTrigger asChild>
-                <Button
-                  variant={currentTool === 'select' ? 'secondary' : 'ghost'}
-                  size="icon" className="h-7 w-7 rounded-md"
-                  onClick={() => setCurrentTool('select')}
-                >
-                  <MousePointer2 className="w-3.5 h-3.5" />
+                <Button variant="ghost" size="icon" className="shrink-0 h-8 w-8 rounded-full" onClick={() => setView('dashboard')}>
+                  <ArrowLeft className="w-4 h-4" />
                 </Button>
               </TooltipTrigger>
-              <TooltipContent side="bottom" className="text-xs">Select / Move (V)</TooltipContent>
-            </Tooltip>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant={currentTool === 'pan' ? 'secondary' : 'ghost'}
-                  size="icon" className="h-7 w-7 rounded-md"
-                  onClick={() => setCurrentTool('pan')}
-                >
-                  <Hand className="w-3.5 h-3.5" />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent side="bottom" className="text-xs">Pan / Move Canvas (H)</TooltipContent>
+              <TooltipContent side="bottom" className="text-xs">Back to Dashboard</TooltipContent>
             </Tooltip>
           </TooltipProvider>
-        </div>
-        <Separator orientation="vertical" className="h-6" />
+          <Separator orientation="vertical" className="h-5" />
 
-        {/* Primary Editing & Annotation Tools */}
-        <div className="flex items-center gap-1 shrink-0">
-          <TooltipProvider delayDuration={300}>
-            {/* Edit Text - Featured */}
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant={currentTool === 'editText' ? 'default' : 'ghost'}
-                  size="sm"
-                  className={`h-8 gap-1.5 px-2.5 text-xs font-medium ${currentTool === 'editText' ? 'bg-blue-600 hover:bg-blue-700 text-white shadow-sm' : ''}`}
-                  onClick={() => setCurrentTool('editText')}
-                >
-                  <Pencil className="w-3.5 h-3.5" />
-                  <span>Edit Text</span>
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent side="bottom" className="text-xs">Click existing PDF text to edit (E)</TooltipContent>
-            </Tooltip>
-
-            {/* Highlight */}
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant={currentTool === 'highlight' ? 'secondary' : 'ghost'}
-                  size="icon" className="h-8 w-8"
-                  onClick={() => setCurrentTool('highlight')}
-                >
-                  <Highlighter className="w-4 h-4 text-amber-500" />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent side="bottom" className="text-xs">Highlight text (A)</TooltipContent>
-            </Tooltip>
-
-            {/* Add Text */}
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant={currentTool === 'text' ? 'secondary' : 'ghost'}
-                  size="icon" className="h-8 w-8"
-                  onClick={() => setCurrentTool('text')}
-                >
-                  <Type className="w-4 h-4" />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent side="bottom" className="text-xs">Insert new text box (T)</TooltipContent>
-            </Tooltip>
-
-            {/* Draw / Pen */}
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant={currentTool === 'draw' ? 'secondary' : 'ghost'}
-                  size="icon" className="h-8 w-8"
-                  onClick={() => setCurrentTool('draw')}
-                >
-                  <PenTool className="w-4 h-4" />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent side="bottom" className="text-xs">Freehand draw / Pen (D)</TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
-
-          {/* Shapes Dropdown */}
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button
-                variant={['rectangle', 'ellipse', 'line'].includes(currentTool) ? 'secondary' : 'ghost'}
-                size="sm"
-                className="h-8 gap-1 px-2 text-xs font-medium"
-              >
-                {currentTool === 'ellipse' ? <Circle className="w-3.5 h-3.5" /> : currentTool === 'line' ? <ArrowUpRight className="w-3.5 h-3.5" /> : <Square className="w-3.5 h-3.5" />}
-                <span>Shapes</span>
-                <ChevronDown className="w-3 h-3 opacity-60" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="start" className="w-44">
-              <DropdownMenuItem onClick={() => setCurrentTool('rectangle')} className="gap-2 cursor-pointer">
-                <Square className="w-4 h-4" /><span>Rectangle</span><kbd className="ml-auto text-[10px] text-muted-foreground font-mono">R</kbd>
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => setCurrentTool('ellipse')} className="gap-2 cursor-pointer">
-                <Circle className="w-4 h-4" /><span>Circle / Oval</span><kbd className="ml-auto text-[10px] text-muted-foreground font-mono">O</kbd>
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => setCurrentTool('line')} className="gap-2 cursor-pointer">
-                <ArrowUpRight className="w-4 h-4" /><span>Arrow / Line</span><kbd className="ml-auto text-[10px] text-muted-foreground font-mono">L</kbd>
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-
-          {/* Erase & Redact Dropdown */}
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button
-                variant={['whiteout', 'redact', 'eraser'].includes(currentTool) ? 'secondary' : 'ghost'}
-                size="sm"
-                className="h-8 gap-1 px-2 text-xs font-medium"
-              >
-                {currentTool === 'redact' ? <EyeOff className="w-3.5 h-3.5 text-red-500" /> : currentTool === 'eraser' ? <Eraser className="w-3.5 h-3.5 text-amber-500" /> : <PenLine className="w-3.5 h-3.5" />}
-                <span>Erase</span>
-                <ChevronDown className="w-3 h-3 opacity-60" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="start" className="w-60">
-              <DropdownMenuItem onClick={() => setCurrentTool('whiteout')} className="gap-2 cursor-pointer">
-                <PenLine className="w-4 h-4 text-gray-500" />
-                <div className="flex flex-col"><span className="font-medium text-xs">Whiteout (Erase)</span><span className="text-[10px] text-muted-foreground">Clean white box to hide text</span></div>
-                <kbd className="ml-auto text-[10px] text-muted-foreground font-mono">W</kbd>
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => setCurrentTool('redact')} className="gap-2 cursor-pointer">
-                <EyeOff className="w-4 h-4 text-red-500" />
-                <div className="flex flex-col"><span className="font-medium text-xs">Blackout Redact</span><span className="text-[10px] text-muted-foreground">Permanent black security bar</span></div>
-                <kbd className="ml-auto text-[10px] text-muted-foreground font-mono">X</kbd>
-              </DropdownMenuItem>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem onClick={() => setCurrentTool('eraser')} className="gap-2 cursor-pointer">
-                <Eraser className="w-4 h-4 text-amber-500" />
-                <div className="flex flex-col"><span className="font-medium text-xs">Annotation Eraser</span><span className="text-[10px] text-muted-foreground">Click shapes/drawings to delete</span></div>
-                <kbd className="ml-auto text-[10px] text-muted-foreground font-mono">Z</kbd>
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-
-          {/* Insert Dropdown (Signature & Image) */}
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button
-                variant={['signature', 'image'].includes(currentTool) ? 'secondary' : 'ghost'}
-                size="sm"
-                className="h-8 gap-1 px-2 text-xs font-medium"
-              >
-                {currentTool === 'image' ? <ImagePlus className="w-3.5 h-3.5" /> : <Stamp className="w-3.5 h-3.5" />}
-                <span>Insert</span>
-                <ChevronDown className="w-3 h-3 opacity-60" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="start" className="w-52">
-              <DropdownMenuItem
-                onClick={() => {
-                  if (!signatureData) { setShowSignaturePad(true); return }
-                  setCurrentTool('signature')
-                }}
-                className="gap-2 cursor-pointer"
-              >
-                <Stamp className="w-4 h-4 text-purple-500" />
-                <div className="flex flex-col"><span className="font-medium text-xs">Signature</span><span className="text-[10px] text-muted-foreground">Draw or place signature</span></div>
-                <kbd className="ml-auto text-[10px] text-muted-foreground font-mono">S</kbd>
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                onClick={() => {
-                  fileInputRef.current?.click()
-                }}
-                className="gap-2 cursor-pointer"
-              >
-                <ImagePlus className="w-4 h-4 text-cyan-500" />
-                <div className="flex flex-col"><span className="font-medium text-xs">Image / Stamp</span><span className="text-[10px] text-muted-foreground">Upload and place PNG/JPG</span></div>
-                <kbd className="ml-auto text-[10px] text-muted-foreground font-mono">I</kbd>
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </div>
-        <Separator orientation="vertical" className="h-6" />
-
-        {/* Colors */}
-        <div className="flex items-center gap-1 shrink-0">
-          {COLORS.map((c) => (
-            <button key={c} className={`w-4 h-4 rounded-full border-2 transition-all ${(selectedAnnot ? selectedAnnot.color : drawColor) === c ? 'border-foreground scale-125' : 'border-transparent hover:scale-110'}`} style={{ backgroundColor: c }} onClick={() => {
-              setDrawColor(c)
-              if (selectedAnnotId) {
-                updateAnnotation(selectedAnnotId, { color: c })
-              }
-            }} />
-          ))}
-        </div>
-        <Separator orientation="vertical" className="h-6" />
-
-        {/* Context-sensitive controls */}
-        {['draw', 'rectangle', 'ellipse', 'line'].includes(currentTool) && (
-          <div className="flex items-center gap-1 shrink-0">
-            <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setStrokeWidth(Math.max(1, strokeWidth - 1))}><Minus className="w-3 h-3" /></Button>
-            <span className="text-xs text-muted-foreground w-7 text-center">{strokeWidth}px</span>
-            <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setStrokeWidth(Math.min(10, strokeWidth + 1))}><Plus className="w-3 h-3" /></Button>
-          </div>
-        )}
-        {(currentTool === 'text' || currentTool === 'editText' || (currentTool === 'select' && selectedAnnot?.type === 'text')) && (
-          <div className="flex items-center gap-1.5 shrink-0">
-            <select
-              value={selectedAnnot?.type === 'text' ? (selectedAnnot.fontFamily || 'Helvetica') : fontFamily}
-              onChange={(e) => {
-                setFontFamily(e.target.value)
-                if (selectedAnnotId) {
-                  updateAnnotation(selectedAnnotId, { fontFamily: e.target.value })
-                }
-              }}
-              className="text-xs border border-border rounded px-1.5 py-1 bg-background"
-            >
-              {FONT_OPTIONS.map(f => <option key={f.value} value={f.value}>{f.label}</option>)}
-            </select>
-            <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => {
-              const currentSize = selectedAnnot?.type === 'text' ? (selectedAnnot.fontSize || 16) : fontSize
-              const nextSize = Math.max(6, currentSize - 2)
-              setFontSize(nextSize)
-              if (selectedAnnotId) {
-                updateAnnotation(selectedAnnotId, { fontSize: nextSize })
-              }
-            }}><Minus className="w-3 h-3" /></Button>
-            <span className="text-xs text-muted-foreground w-7 text-center">
-              {selectedAnnot?.type === 'text' ? (selectedAnnot.fontSize || 16) : fontSize}px
-            </span>
-            <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => {
-              const currentSize = selectedAnnot?.type === 'text' ? (selectedAnnot.fontSize || 16) : fontSize
-              const nextSize = Math.min(72, currentSize + 2)
-              setFontSize(nextSize)
-              if (selectedAnnotId) {
-                updateAnnotation(selectedAnnotId, { fontSize: nextSize })
-              }
-            }}><Plus className="w-3 h-3" /></Button>
-
-            {/* Bold and Italic toggles */}
-            {(currentTool === 'text' || (currentTool === 'select' && selectedAnnot?.type === 'text')) && (
-              <>
-                <Button
-                  variant={(selectedAnnot?.type === 'text' ? !!selectedAnnot.bold : textBold) ? 'secondary' : 'ghost'}
-                  size="icon" className="h-7 w-7 font-bold"
-                  onClick={() => {
-                    if (selectedAnnotId) {
-                      const annot = annotations.find(a => a.id === selectedAnnotId)
-                      if (annot) updateAnnotation(selectedAnnotId, { bold: !annot.bold })
-                    } else {
-                      setTextBold(!textBold)
-                    }
-                  }}
-                >
-                  B
-                </Button>
-                <Button
-                  variant={(selectedAnnot?.type === 'text' ? !!selectedAnnot.italic : textItalic) ? 'secondary' : 'ghost'}
-                  size="icon" className="h-7 w-7 italic font-serif"
-                  onClick={() => {
-                    if (selectedAnnotId) {
-                      const annot = annotations.find(a => a.id === selectedAnnotId)
-                      if (annot) updateAnnotation(selectedAnnotId, { italic: !annot.italic })
-                    } else {
-                      setTextItalic(!textItalic)
-                    }
-                  }}
-                >
-                  I
-                </Button>
-              </>
-            )}
-          </div>
-        )}
-
-        {selectedAnnotId && selectedAnnot && ['signature', 'image', 'rectangle', 'ellipse', 'redact', 'whiteout'].includes(selectedAnnot.type) && (
-          <div className="flex items-center gap-1.5 shrink-0 select-none">
-            <span className="text-xs text-muted-foreground uppercase font-bold shrink-0">Size:</span>
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-7 w-7"
-              onClick={() => {
-                const w = selectedAnnot.width || (selectedAnnot.type === 'signature' ? 150 : selectedAnnot.type === 'image' ? 200 : 100)
-                const h = selectedAnnot.height || (selectedAnnot.type === 'signature' ? 50 : selectedAnnot.type === 'image' ? 150 : 50)
-                const ratio = h > 0 ? w / h : 1
-                const newW = Math.max(10, w - 10)
-                const newH = selectedAnnot.type === 'signature' || selectedAnnot.type === 'image'
-                  ? newW / ratio
-                  : Math.max(10, h - 10)
-                saveToUndoStack()
-                updateAnnotation(selectedAnnot.id, { width: newW, height: newH })
-              }}
-            >
-              <Minus className="w-3 h-3" />
-            </Button>
-            <div className="w-24 px-1 flex items-center">
-              <Slider
-                value={[selectedAnnot.width || 100]}
-                min={20}
-                max={800}
-                step={2}
-                onValueChange={(val) => {
-                  const newW = val[0]
-                  const w = selectedAnnot.width || (selectedAnnot.type === 'signature' ? 150 : selectedAnnot.type === 'image' ? 200 : 100)
-                  const h = selectedAnnot.height || (selectedAnnot.type === 'signature' ? 50 : selectedAnnot.type === 'image' ? 150 : 50)
-                  const ratio = h > 0 ? w / h : 1
-                  const newH = selectedAnnot.type === 'signature' || selectedAnnot.type === 'image'
-                    ? newW / ratio
-                    : h
-                  updateAnnotation(selectedAnnot.id, { width: newW, height: newH })
-                }}
-              />
+          <div className="flex items-center gap-2 min-w-0">
+            <div className="w-6 h-6 rounded-md bg-rose-500/10 dark:bg-rose-500/20 text-rose-600 dark:text-rose-400 flex items-center justify-center font-bold text-[10px] shrink-0 border border-rose-500/20">
+              PDF
             </div>
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-7 w-7"
-              onClick={() => {
-                const w = selectedAnnot.width || (selectedAnnot.type === 'signature' ? 150 : selectedAnnot.type === 'image' ? 200 : 100)
-                const h = selectedAnnot.height || (selectedAnnot.type === 'signature' ? 50 : selectedAnnot.type === 'image' ? 150 : 50)
-                const ratio = h > 0 ? w / h : 1
-                const newW = Math.min(1000, w + 10)
-                const newH = selectedAnnot.type === 'signature' || selectedAnnot.type === 'image'
-                  ? newW / ratio
-                  : Math.min(1000, h + 10)
-                saveToUndoStack()
-                updateAnnotation(selectedAnnot.id, { width: newW, height: newH })
-              }}
-            >
-              <Plus className="w-3 h-3" />
-            </Button>
-            <span className="text-xs text-muted-foreground font-mono w-10 text-right">
-              {Math.round(selectedAnnot.width || 0)}px
+            <span className="text-xs font-semibold truncate max-w-[180px]" title={currentDocument?.fileName}>
+              {currentDocument?.fileName || 'Document.pdf'}
+            </span>
+            <span className="text-[10px] text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800/40 px-1.5 py-0.5 rounded-full font-medium shrink-0 flex items-center gap-1">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+              Saved
             </span>
           </div>
-        )}
+        </div>
 
-        {/* Mode indicators */}
-        {isEditTextMode && <span className="text-xs bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 px-2 py-0.5 rounded-full shrink-0">Click text to edit</span>}
-        {isSignatureMode && <span className="text-xs bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300 px-2 py-0.5 rounded-full shrink-0">Click to place signature</span>}
-        {isRedactMode && <span className="text-xs bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300 px-2 py-0.5 rounded-full shrink-0">Drag to redact</span>}
-        {annotations.some(a => a.type === 'redact') && (
-          <Button
-            variant="destructive" size="sm"
-            className="shrink-0 h-8 gap-1.5 text-xs"
-            disabled={processing === 'redact'}
-            onClick={handleApplyRedaction}
-          >
-            {processing === 'redact'
-              ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Redacting…</>
-              : <><EyeOff className="w-3.5 h-3.5" /> Apply Redaction ({annotations.filter(a => a.type === 'redact').length})</>}
-          </Button>
-        )}
-        {isWhiteoutMode && <span className="text-xs bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 px-2 py-0.5 rounded-full shrink-0">Drag to whiteout</span>}
-        {isPanMode && <span className="text-xs bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300 px-2 py-0.5 rounded-full shrink-0">Drag to pan</span>}
-        {isImageMode && <span className="text-xs bg-cyan-100 dark:bg-cyan-900/30 text-cyan-700 dark:text-cyan-300 px-2 py-0.5 rounded-full shrink-0">Click to place image</span>}
-        {isCropping && <span className="text-xs bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300 px-2 py-0.5 rounded-full shrink-0">Drag to select crop area</span>}
+        {/* Center: Segmented Mode Selector */}
+        <div className="flex items-center bg-muted/80 dark:bg-slate-900 border border-border/60 p-0.5 rounded-full shadow-inner shrink-0">
+          {(
+            [
+              { id: 'view', label: 'View', icon: Eye, color: 'text-emerald-500', activeCls: 'bg-emerald-600 text-white shadow-sm font-semibold' },
+              { id: 'annotate', label: 'Annotate', icon: Highlighter, color: 'text-amber-500', activeCls: 'bg-amber-500 text-white shadow-sm font-semibold' },
+              { id: 'edit', label: 'Edit PDF', icon: Pencil, color: 'text-blue-500', activeCls: 'bg-blue-600 text-white shadow-sm font-semibold' },
+              { id: 'sign', label: 'Fill & Sign', icon: Stamp, color: 'text-purple-500', activeCls: 'bg-purple-600 text-white shadow-sm font-semibold' },
+            ] as const
+          ).map((tab) => {
+            const Icon = tab.icon
+            const isActive = editorMode === tab.id
+            return (
+              <button
+                key={tab.id}
+                onClick={() => handleModeChange(tab.id)}
+                className={`flex items-center gap-1.5 px-3.5 py-1 text-xs rounded-full transition-all duration-200 ${
+                  isActive
+                    ? `${tab.activeCls} scale-100`
+                    : 'text-muted-foreground hover:text-foreground hover:bg-background/50 font-medium'
+                }`}
+              >
+                <Icon className={`w-3.5 h-3.5 ${isActive ? 'text-white' : tab.color}`} />
+                <span>{tab.label}</span>
+              </button>
+            )
+          })}
+        </div>
 
-        <div className="flex-1" />
-
-        {/* Quick tools dropdown */}
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button variant="ghost" size="sm" className="shrink-0 h-8 gap-1.5 text-xs">
-              <Settings2 className="w-3.5 h-3.5" /> Tools
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-52">
-            <DropdownMenuItem onClick={() => setShowWatermarkDialog(true)} className="gap-2 cursor-pointer">
-              <Droplets className="w-4 h-4" /><span>Add Watermark</span>
-            </DropdownMenuItem>
-            <DropdownMenuItem onClick={() => setShowPageNumDialog(true)} className="gap-2 cursor-pointer">
-              <Hash className="w-4 h-4" /><span>Add Page Numbers</span>
-            </DropdownMenuItem>
-            <DropdownMenuItem onClick={handleOcr} disabled={processing === 'ocr'} className="gap-2 cursor-pointer">
-              {processing === 'ocr' ? <Loader2 className="w-4 h-4 animate-spin" /> : <ScanText className="w-4 h-4" />}
-              <span>{processing === 'ocr' ? 'Running OCR…' : 'OCR — Make Searchable'}</span>
-            </DropdownMenuItem>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem onClick={() => { setCropping(!isCropping); if (isCropping) setCropBox(null) }} className="gap-2 cursor-pointer">
-              <Crop className="w-4 h-4" /><span>{isCropping ? 'Cancel Crop' : 'Crop Page'}</span>
-            </DropdownMenuItem>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem onClick={() => { insertBlankPage(currentPage); showStatus('Blank page inserted') }} className="gap-2 cursor-pointer">
-              <FileText className="w-4 h-4" /><span>Insert Blank Page</span>
-            </DropdownMenuItem>
-            <DropdownMenuItem onClick={() => { duplicatePage(currentPage); showStatus('Page duplicated') }} className="gap-2 cursor-pointer">
-              <Copy className="w-4 h-4" /><span>Duplicate This Page</span>
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
-
-        {/* Zoom */}
-        <div className="flex items-center gap-1 shrink-0">
+        {/* Right: Actions, AI Copilot, Export */}
+        <div className="flex items-center gap-1.5 shrink-0">
+          {/* Undo / Redo */}
           <TooltipProvider delayDuration={300}>
             <Tooltip><TooltipTrigger asChild>
-              <Button variant="ghost" size="icon" className="h-8 w-8" onClick={handleFitToWidth}><Maximize2 className="w-4 h-4" /></Button>
-            </TooltipTrigger><TooltipContent side="bottom" className="text-xs">Fit Width</TooltipContent></Tooltip>
+              <Button variant="ghost" size="icon" className="shrink-0 h-8 w-8 rounded-full" disabled={!canUndo} onClick={undo}><Undo2 className="w-3.5 h-3.5" /></Button>
+            </TooltipTrigger><TooltipContent side="bottom" className="text-xs">Undo (Ctrl+Z)</TooltipContent></Tooltip>
+            <Tooltip><TooltipTrigger asChild>
+              <Button variant="ghost" size="icon" className="shrink-0 h-8 w-8 rounded-full" disabled={!canRedo} onClick={redo}><Redo2 className="w-3.5 h-3.5" /></Button>
+            </TooltipTrigger><TooltipContent side="bottom" className="text-xs">Redo (Ctrl+Shift+Z)</TooltipContent></Tooltip>
           </TooltipProvider>
-          <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setZoom(zoom - 0.1)}><ZoomOut className="w-4 h-4" /></Button>
-          <span className="text-xs text-muted-foreground w-10 text-center">{Math.round(zoom * 100)}%</span>
-          <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setZoom(zoom + 0.1)}><ZoomIn className="w-4 h-4" /></Button>
-          <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setZoom(1)}><RotateCcw className="w-4 h-4" /></Button>
+
+          <Separator orientation="vertical" className="h-5" />
+
+          {/* Sidebar drawer toggle */}
+          <TooltipProvider delayDuration={300}>
+            <Tooltip><TooltipTrigger asChild>
+              <Button variant={showSidebar ? 'secondary' : 'ghost'} size="icon" className="shrink-0 h-8 w-8 rounded-full" onClick={toggleSidebar}>
+                {showSidebar ? <PanelLeftClose className="w-4 h-4" /> : <PanelLeftOpen className="w-4 h-4" />}
+              </Button>
+            </TooltipTrigger><TooltipContent side="bottom" className="text-xs">Thumbnails (Ctrl+\)</TooltipContent></Tooltip>
+          </TooltipProvider>
+
+          {/* Annotations list */}
+          <TooltipProvider delayDuration={300}>
+            <Tooltip><TooltipTrigger asChild>
+              <Button variant={showAnnotationPanel ? 'secondary' : 'ghost'} size="icon" className="shrink-0 h-8 w-8 rounded-full relative" onClick={toggleAnnotationPanel}>
+                <FileText className="w-4 h-4" />
+                {totalAnnotations > 0 && <span className="absolute -top-0.5 -right-0.5 min-w-[15px] h-3.5 bg-emerald-600 text-white text-[9px] font-bold rounded-full flex items-center justify-center px-1">{totalAnnotations}</span>}
+              </Button>
+            </TooltipTrigger><TooltipContent side="bottom" className="text-xs">Annotations List</TooltipContent></Tooltip>
+          </TooltipProvider>
+
+          {/* Quick Tools menu */}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" size="icon" className="shrink-0 h-8 w-8 rounded-full" title="Tools">
+                <Settings2 className="w-4 h-4" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-52">
+              <DropdownMenuItem onClick={() => setShowWatermarkDialog(true)} className="gap-2 cursor-pointer text-xs">
+                <Droplets className="w-4 h-4 text-cyan-500" /><span>Add Watermark</span>
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => setShowPageNumDialog(true)} className="gap-2 cursor-pointer text-xs">
+                <Hash className="w-4 h-4 text-indigo-500" /><span>Add Page Numbers</span>
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={handleOcr} disabled={processing === 'ocr'} className="gap-2 cursor-pointer text-xs">
+                {processing === 'ocr' ? <Loader2 className="w-4 h-4 animate-spin" /> : <ScanText className="w-4 h-4 text-emerald-500" />}
+                <span>{processing === 'ocr' ? 'Running OCR…' : 'OCR — Make Searchable'}</span>
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onClick={() => { insertBlankPage(currentPage); showStatus('Blank page inserted') }} className="gap-2 cursor-pointer text-xs">
+                <FileText className="w-4 h-4" /><span>Insert Blank Page</span>
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => { duplicatePage(currentPage); showStatus('Page duplicated') }} className="gap-2 cursor-pointer text-xs">
+                <Copy className="w-4 h-4" /><span>Duplicate This Page</span>
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onClick={() => setShowShortcuts(true)} className="gap-2 cursor-pointer text-xs">
+                <Keyboard className="w-4 h-4" /><span>Keyboard Shortcuts (?)</span>
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+
+          {/* AI Assistant Button */}
+          <Button
+            variant="outline"
+            size="sm"
+            className={`shrink-0 h-8 rounded-full px-3 text-xs gap-1.5 font-semibold transition-all ${
+              showAiPanel
+                ? 'bg-emerald-600 text-white border-emerald-600 shadow-md'
+                : 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-500/20 shadow-xs'
+            }`}
+            onClick={toggleAiPanel}
+          >
+            <Sparkles className="w-3.5 h-3.5" />
+            <span>AI Copilot</span>
+          </Button>
+
+          {/* Export Primary Dropdown */}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                size="sm"
+                className="shrink-0 h-8 rounded-full px-3.5 text-xs font-semibold gap-1.5 bg-primary text-primary-foreground hover:bg-primary/90 shadow-xs"
+                disabled={isExporting}
+              >
+                {isExporting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-3.5 h-3.5" />}
+                <span>Export</span>
+                <ChevronDown className="w-3 h-3 opacity-70" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-56">
+              <DropdownMenuItem onClick={handleExportPdf} className="gap-2 cursor-pointer">
+                <FileDown className="w-4 h-4 text-emerald-600" /><div><div className="text-xs font-semibold">Export as PDF</div><div className="text-[10px] text-muted-foreground">With vector edits & annotations</div></div>
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={handleDownloadPng} className="gap-2 cursor-pointer">
+                <ImageIcon className="w-4 h-4 text-blue-600" /><div><div className="text-xs font-semibold">Export Page as PNG</div><div className="text-[10px] text-muted-foreground">High-res raster snapshot</div></div>
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={handleConvertToJpg} className="gap-2 cursor-pointer">
+                <ImageIcon className="w-4 h-4 text-amber-600" /><div><div className="text-xs font-semibold">Export Page as JPG</div><div className="text-[10px] text-muted-foreground">Compressed JPEG format</div></div>
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onClick={() => handleConvert('txt')} className="gap-2 cursor-pointer">
+                <FileText className="w-4 h-4" /><div><div className="text-xs font-semibold">Convert to TXT</div><div className="text-[10px] text-muted-foreground">Plain text document</div></div>
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => handleConvert('html')} className="gap-2 cursor-pointer">
+                <FileOutput className="w-4 h-4" /><div><div className="text-xs font-semibold">Convert to HTML</div><div className="text-[10px] text-muted-foreground">Formatted web page</div></div>
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onClick={handleCompress} disabled={!!processing} className="gap-2 cursor-pointer">
+                <Minus className="w-4 h-4 text-purple-600" /><div><div className="text-xs font-semibold">Compress PDF</div><div className="text-[10px] text-muted-foreground">Reduce file size</div></div>
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={handleProtect} disabled={!!processing} className="gap-2 cursor-pointer">
+                <Shield className="w-4 h-4 text-rose-600" /><div><div className="text-xs font-semibold">Password Protect</div><div className="text-[10px] text-muted-foreground">Encrypt with password</div></div>
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onClick={handlePrint} className="gap-2 cursor-pointer">
+                <Printer className="w-4 h-4" /><div className="text-xs font-semibold">Print Page</div>
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
-        <Separator orientation="vertical" className="h-6" />
-
-        {/* Export Dropdown */}
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button variant="ghost" size="icon" className="shrink-0 relative" disabled={isExporting}>
-              {isExporting ? <div className="w-4 h-4 border-2 border-emerald-200 border-t-emerald-600 rounded-full animate-spin" /> : <Download className="w-4 h-4" />}
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-56">
-            <DropdownMenuItem onClick={handleExportPdf} className="gap-2 cursor-pointer">
-              <FileDown className="w-4 h-4" /><div><div className="text-sm font-medium">Export as PDF</div><div className="text-xs text-muted-foreground">With all edits embedded</div></div>
-            </DropdownMenuItem>
-            <DropdownMenuItem onClick={handleDownloadPng} className="gap-2 cursor-pointer">
-              <ImageIcon className="w-4 h-4" /><div><div className="text-sm font-medium">Export as PNG</div><div className="text-xs text-muted-foreground">Current page only</div></div>
-            </DropdownMenuItem>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem onClick={() => handleConvert('txt')} className="gap-2 cursor-pointer">
-              <FileText className="w-4 h-4" /><div><div className="text-sm font-medium">Convert to TXT</div><div className="text-xs text-muted-foreground">Extract all text</div></div>
-            </DropdownMenuItem>
-            <DropdownMenuItem onClick={() => handleConvert('html')} className="gap-2 cursor-pointer">
-              <FileOutput className="w-4 h-4" /><div><div className="text-sm font-medium">Convert to HTML</div><div className="text-xs text-muted-foreground">Styled web page</div></div>
-            </DropdownMenuItem>
-            <DropdownMenuItem onClick={handleConvertToJpg} className="gap-2 cursor-pointer">
-              <ImageIcon className="w-4 h-4" /><div><div className="text-sm font-medium">Convert to JPG</div><div className="text-xs text-muted-foreground">Current page as JPEG image</div></div>
-            </DropdownMenuItem>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem onClick={handleCompress} disabled={!!processing} className="gap-2 cursor-pointer">
-              <Minus className="w-4 h-4" /><div><div className="text-sm font-medium">Compress PDF</div><div className="text-xs text-muted-foreground">Reduce file size</div></div>
-            </DropdownMenuItem>
-            <DropdownMenuItem onClick={handleProtect} disabled={!!processing} className="gap-2 cursor-pointer">
-              <Shield className="w-4 h-4" /><div><div className="text-sm font-medium">Password Protect</div><div className="text-xs text-muted-foreground">Encrypt with password</div></div>
-            </DropdownMenuItem>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem onClick={handlePrint} className="gap-2 cursor-pointer">
-              <Printer className="w-4 h-4" /><div className="text-sm font-medium">Print Page</div>
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
-
-        {/* AI assistant toggle */}
-        <TooltipProvider delayDuration={300}>
-          <Tooltip><TooltipTrigger asChild>
-            <Button variant="ghost" size="icon" className={`shrink-0 ${showAiPanel ? 'bg-emerald-100 dark:bg-emerald-900/40 text-emerald-600' : ''}`} onClick={toggleAiPanel}>
-              <Sparkles className="w-4 h-4" />
-            </Button>
-          </TooltipTrigger><TooltipContent side="bottom" className="text-xs">AI Assistant — edit by chat</TooltipContent></Tooltip>
-        </TooltipProvider>
-
-        {/* Annotation panel toggle */}
-        <TooltipProvider delayDuration={300}>
-          <Tooltip><TooltipTrigger asChild>
-            <Button variant="ghost" size="icon" className="shrink-0 relative" onClick={toggleAnnotationPanel}>
-              <FileText className="w-4 h-4" />
-              {totalAnnotations > 0 && <span className="absolute -top-1 -right-1 min-w-[16px] h-4 bg-emerald-600 text-white text-[10px] font-bold rounded-full flex items-center justify-center px-1">{totalAnnotations}</span>}
-            </Button>
-          </TooltipTrigger><TooltipContent side="bottom" className="text-xs">Annotations ({totalAnnotations})</TooltipContent></Tooltip>
-        </TooltipProvider>
-
-        {/* Shortcuts */}
-        <TooltipProvider delayDuration={300}>
-          <Tooltip><TooltipTrigger asChild>
-            <Button variant="ghost" size="icon" className="shrink-0 h-8 w-8" onClick={() => setShowShortcuts(true)}><Keyboard className="w-4 h-4" /></Button>
-          </TooltipTrigger><TooltipContent side="bottom" className="text-xs">Shortcuts (?)</TooltipContent></Tooltip>
-        </TooltipProvider>
       </div>
 
       {/* ===== TOP TOOLBAR (Mobile) ===== */}
       <div className="flex md:hidden items-center justify-between px-3 py-2 border-b border-border/60 bg-background shrink-0 select-none">
         <div className="flex items-center gap-1 shrink-0">
-          <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setView('dashboard')}>
-            <ArrowLeft className="w-4.5 h-4.5" />
+          <Button variant="ghost" size="icon" className="h-8 w-8 rounded-full" onClick={() => setView('dashboard')}>
+            <ArrowLeft className="w-4 h-4" />
           </Button>
-          <Button variant="ghost" size="icon" className="h-8 w-8" onClick={toggleSidebar}>
-            {showSidebar ? <PanelLeftClose className="w-4.5 h-4.5" /> : <PanelLeftOpen className="w-4.5 h-4.5" />}
+          <Button variant="ghost" size="icon" className="h-8 w-8 rounded-full" onClick={toggleSidebar}>
+            {showSidebar ? <PanelLeftClose className="w-4 h-4" /> : <PanelLeftOpen className="w-4 h-4" />}
           </Button>
         </div>
 
-        <div className="flex flex-col items-center justify-center min-w-0 flex-1 px-2">
-          <span className="text-xs font-semibold truncate max-w-[130px]">{currentDocument?.fileName}</span>
-          <span className="text-[10px] text-muted-foreground font-medium">Page {currentPage} of {totalPages}</span>
+        {/* Mobile Mode Switcher */}
+        <div className="flex items-center bg-muted/80 p-0.5 rounded-full text-[10px] gap-0.5">
+          {(
+            [
+              { id: 'view', label: 'View', activeCls: 'bg-emerald-600 text-white font-bold shadow-xs' },
+              { id: 'annotate', label: 'Annotate', activeCls: 'bg-amber-500 text-white font-bold shadow-xs' },
+              { id: 'edit', label: 'Edit', activeCls: 'bg-blue-600 text-white font-bold shadow-xs' },
+              { id: 'sign', label: 'Sign', activeCls: 'bg-purple-600 text-white font-bold shadow-xs' },
+            ] as const
+          ).map((m) => (
+            <button
+              key={m.id}
+              onClick={() => handleModeChange(m.id)}
+              className={`px-2 py-0.5 rounded-full capitalize font-medium transition-all ${
+                editorMode === m.id
+                  ? m.activeCls
+                  : 'text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              {m.label}
+            </button>
+          ))}
         </div>
 
-        <div className="flex items-center gap-0.5 shrink-0">
-          <Button variant="ghost" size="icon" className={`h-8 w-8 ${showAiPanel ? 'bg-emerald-100 dark:bg-emerald-900/40 text-emerald-600' : ''}`} onClick={toggleAiPanel}>
+        <div className="flex items-center gap-1 shrink-0">
+          <Button variant="ghost" size="icon" className={`h-8 w-8 rounded-full ${showAiPanel ? 'bg-emerald-100 dark:bg-emerald-900/40 text-emerald-600' : ''}`} onClick={toggleAiPanel}>
             <Sparkles className="w-4 h-4" />
           </Button>
-          <Button variant="ghost" size="icon" className="h-8 w-8" disabled={!canUndo} onClick={undo}>
+          <Button variant="ghost" size="icon" className="h-8 w-8 rounded-full" disabled={!canUndo} onClick={undo}>
             <Undo2 className="w-4 h-4" />
           </Button>
-          <Button variant="ghost" size="icon" className="h-8 w-8" disabled={!canRedo} onClick={redo}>
+          <Button variant="ghost" size="icon" className="h-8 w-8 rounded-full" disabled={!canRedo} onClick={redo}>
             <Redo2 className="w-4 h-4" />
           </Button>
-
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="icon" className="h-8 w-8 relative">
-                <Settings2 className="w-4.5 h-4.5" />
-                {totalAnnotations > 0 && (
-                  <span className="absolute -top-0.5 -right-0.5 min-w-[14px] h-3.5 bg-emerald-600 text-white text-[9px] font-bold rounded-full flex items-center justify-center px-0.5">
-                    {totalAnnotations}
-                  </span>
-                )}
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-56 max-h-[80vh] overflow-y-auto">
-              <div className="px-2 py-1.5 flex items-center justify-between text-xs text-muted-foreground border-b border-border/40 mb-1">
-                <span>Zoom: {Math.round(zoom * 100)}%</span>
-                <div className="flex items-center gap-0.5">
-                  <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => setZoom(zoom - 0.1)}><ZoomOut className="w-3 h-3" /></Button>
-                  <Button variant="ghost" size="icon" className="h-6 w-6" onClick={handleFitToWidth}><Maximize2 className="w-3 h-3" /></Button>
-                  <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => setZoom(zoom + 0.1)}><ZoomIn className="w-3 h-3" /></Button>
-                </div>
-              </div>
-              <DropdownMenuItem onClick={() => setShowWatermarkDialog(true)} className="gap-2 cursor-pointer text-xs">
-                <Droplets className="w-3.5 h-3.5 text-muted-foreground" /><span>Add Watermark</span>
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => setShowPageNumDialog(true)} className="gap-2 cursor-pointer text-xs">
-                <Hash className="w-3.5 h-3.5 text-muted-foreground" /><span>Add Page Numbers</span>
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={handleOcr} disabled={processing === 'ocr'} className="gap-2 cursor-pointer text-xs">
-                {processing === 'ocr' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <ScanText className="w-3.5 h-3.5 text-muted-foreground" />}
-                <span>{processing === 'ocr' ? 'Running OCR…' : 'OCR — Make Searchable'}</span>
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => { setCropping(!isCropping); if (isCropping) setCropBox(null) }} className="gap-2 cursor-pointer text-xs">
-                <Crop className="w-3.5 h-3.5 text-muted-foreground" /><span>{isCropping ? 'Cancel Crop' : 'Crop Page'}</span>
-              </DropdownMenuItem>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem onClick={() => { insertBlankPage(currentPage); showStatus('Blank page inserted') }} className="gap-2 cursor-pointer text-xs">
-                <FileText className="w-3.5 h-3.5 text-muted-foreground" /><span>Insert Blank Page</span>
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => { duplicatePage(currentPage); showStatus('Page duplicated') }} className="gap-2 cursor-pointer text-xs">
-                <Copy className="w-3.5 h-3.5 text-muted-foreground" /><span>Duplicate This Page</span>
-              </DropdownMenuItem>
-              <DropdownMenuSeparator />
-              <div className="px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Export Options</div>
-              <DropdownMenuItem onClick={handleExportPdf} className="gap-2 cursor-pointer text-xs">
-                <FileDown className="w-3.5 h-3.5 text-muted-foreground" /><span>Export as PDF</span>
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={handleDownloadPng} className="gap-2 cursor-pointer text-xs">
-                <ImageIcon className="w-3.5 h-3.5 text-muted-foreground" /><span>Export as PNG</span>
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={handleConvertToJpg} className="gap-2 cursor-pointer text-xs">
-                <ImageIcon className="w-3.5 h-3.5 text-muted-foreground" /><span>Convert to JPG</span>
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => handleConvert('txt')} className="gap-2 cursor-pointer text-xs">
-                <FileText className="w-3.5 h-3.5 text-muted-foreground" /><span>Convert to TXT</span>
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => handleConvert('html')} className="gap-2 cursor-pointer text-xs">
-                <FileOutput className="w-3.5 h-3.5 text-muted-foreground" /><span>Convert to HTML</span>
-              </DropdownMenuItem>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem onClick={handleCompress} disabled={!!processing} className="gap-2 cursor-pointer text-xs">
-                <Minus className="w-3.5 h-3.5 text-muted-foreground" /><span>Compress PDF</span>
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={handleProtect} disabled={!!processing} className="gap-2 cursor-pointer text-xs">
-                <Shield className="w-3.5 h-3.5 text-muted-foreground" /><span>Password Protect</span>
-              </DropdownMenuItem>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem onClick={handlePrint} className="gap-2 cursor-pointer text-xs">
-                <Printer className="w-3.5 h-3.5 text-muted-foreground" /><span>Print Page</span>
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
         </div>
       </div>
-      {/* ===== PAGE NAV BAR ===== */}
-      <div className="flex items-center justify-center gap-3 px-4 py-1.5 border-b border-border/40 bg-background shrink-0 select-none">
-        <Button variant="outline" size="icon" className="h-7 w-7" disabled={currentPage <= 1} onClick={() => setCurrentPage(currentPage - 1)}><ChevronLeft className="w-4 h-4" /></Button>
-        <span className="text-sm text-muted-foreground">Page <span className="font-medium text-foreground">{currentPage}</span> of {totalPages}</span>
-        <Button variant="outline" size="icon" className="h-7 w-7" disabled={currentPage >= totalPages} onClick={() => setCurrentPage(currentPage + 1)}><ChevronRight className="w-4 h-4" /></Button>
-        <span className="text-xs text-muted-foreground ml-3 truncate max-w-[200px] hidden sm:inline">{currentDocument?.fileName}</span>
-        {totalAnnotations > 0 && <span className="text-xs bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300 px-2 py-0.5 rounded-full ml-1 hidden sm:inline">{totalAnnotations} annot.</span>}
-        {textEdits.size > 0 && <span className="text-xs bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 px-2 py-0.5 rounded-full ml-1 hidden sm:inline">{textEdits.size} text edit{textEdits.size !== 1 ? 's' : ''}</span>}
-      </div>
-
-      {/* ===== CONTEXTUAL TOOL HELPER BANNER ===== */}
-      {currentTool !== 'select' && (
-        <div className="bg-muted/70 border-b border-border/50 px-4 py-1.5 flex items-center justify-between text-xs transition-all shrink-0 z-20">
-          <div className="flex items-center gap-2">
-            {currentTool === 'editText' && (
-              <span className="flex items-center gap-2 text-blue-700 dark:text-blue-300">
-                <Pencil className="w-3.5 h-3.5 shrink-0" />
-                <span><strong className="font-semibold">Edit Text Mode:</strong> Click any word or line on the PDF canvas to edit it directly.</span>
-              </span>
-            )}
-            {currentTool === 'highlight' && (
-              <span className="flex items-center gap-2 text-amber-700 dark:text-amber-300">
-                <Highlighter className="w-3.5 h-3.5 shrink-0" />
-                <span><strong className="font-semibold">Highlight Mode:</strong> Click and drag across any text to highlight it.</span>
-              </span>
-            )}
-            {currentTool === 'text' && (
-              <span className="flex items-center gap-2 text-emerald-700 dark:text-emerald-300">
-                <Type className="w-3.5 h-3.5 shrink-0" />
-                <span><strong className="font-semibold">Add Text:</strong> Click anywhere on the page to insert a new text box.</span>
-              </span>
-            )}
-            {currentTool === 'draw' && (
-              <span className="flex items-center gap-2 text-foreground/90">
-                <PenTool className="w-3.5 h-3.5 shrink-0" />
-                <span><strong className="font-semibold">Freehand Pen:</strong> Click and drag to sketch or write notes.</span>
-              </span>
-            )}
-            {currentTool === 'rectangle' && (
-              <span className="flex items-center gap-2 text-foreground/90">
-                <Square className="w-3.5 h-3.5 shrink-0" />
-                <span><strong className="font-semibold">Rectangle:</strong> Click and drag to draw a box.</span>
-              </span>
-            )}
-            {currentTool === 'ellipse' && (
-              <span className="flex items-center gap-2 text-foreground/90">
-                <Circle className="w-3.5 h-3.5 shrink-0" />
-                <span><strong className="font-semibold">Circle / Oval:</strong> Click and drag to draw an ellipse.</span>
-              </span>
-            )}
-            {currentTool === 'line' && (
-              <span className="flex items-center gap-2 text-foreground/90">
-                <ArrowUpRight className="w-3.5 h-3.5 shrink-0" />
-                <span><strong className="font-semibold">Arrow / Line:</strong> Click and drag to point an arrow.</span>
-              </span>
-            )}
-            {currentTool === 'whiteout' && (
-              <span className="flex items-center gap-2 text-gray-800 dark:text-gray-200">
-                <PenLine className="w-3.5 h-3.5 shrink-0" />
-                <span><strong className="font-semibold">Whiteout Erase:</strong> Drag a box over any text to erase it cleanly with white.</span>
-              </span>
-            )}
-            {currentTool === 'redact' && (
-              <span className="flex items-center gap-2 text-red-700 dark:text-red-300">
-                <EyeOff className="w-3.5 h-3.5 shrink-0" />
-                <span><strong className="font-semibold">Blackout Redact:</strong> Drag a box over sensitive information to redact permanently.</span>
-              </span>
-            )}
-            {currentTool === 'eraser' && (
-              <span className="flex items-center gap-2 text-amber-700 dark:text-amber-300">
-                <Eraser className="w-3.5 h-3.5 shrink-0" />
-                <span><strong className="font-semibold">Eraser:</strong> Click any drawn shape, line, or highlight to remove it.</span>
-              </span>
-            )}
-            {currentTool === 'signature' && (
-              <span className="flex items-center gap-2 text-purple-700 dark:text-purple-300">
-                <Stamp className="w-3.5 h-3.5 shrink-0" />
-                <span><strong className="font-semibold">Place Signature:</strong> Click anywhere on the page to drop your signature.</span>
-              </span>
-            )}
-            {currentTool === 'image' && (
-              <span className="flex items-center gap-2 text-cyan-700 dark:text-cyan-300">
-                <ImagePlus className="w-3.5 h-3.5 shrink-0" />
-                <span><strong className="font-semibold">Place Image:</strong> Click anywhere on the page to place your image stamp.</span>
-              </span>
-            )}
-            {currentTool === 'pan' && (
-              <span className="flex items-center gap-2 text-amber-700 dark:text-amber-300">
-                <Hand className="w-3.5 h-3.5 shrink-0" />
-                <span><strong className="font-semibold">Pan Canvas:</strong> Click and drag to smoothly scroll/pan across the page.</span>
-              </span>
-            )}
-          </div>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-6 px-2 text-[11px] font-medium text-muted-foreground hover:text-foreground hover:bg-muted"
-            onClick={() => setCurrentTool('select')}
-          >
-            Exit Tool (Esc / V)
-          </Button>
-        </div>
-      )}
 
       {/* ===== MAIN CONTENT ===== */}
       <div className="flex-1 flex overflow-hidden relative">
@@ -2278,11 +1860,269 @@ export function PdfEditor() {
 
         {/* Canvas Area */}
         <div
-          ref={containerRef} className="flex-1 overflow-auto flex items-start justify-center p-2 sm:p-6"
+          ref={containerRef} className="flex-1 overflow-auto flex items-start justify-center p-2 sm:p-6 sm:pt-14 relative bg-slate-100/70 dark:bg-slate-950"
           onWheel={handleWheel}
           style={{ cursor: isPanMode ? 'grab' : isCropping ? 'crosshair' : undefined }}
         >
-          <div className="pdf-canvas-container shadow-xl rounded-lg overflow-hidden relative">
+          {/* ===== FLOATING CAPSULE TOOLBAR (Figma / Apple Style) ===== */}
+          <div className="fixed md:absolute top-14 md:top-3 left-1/2 -translate-x-1/2 z-30 flex items-center gap-1.5 p-1 bg-background/90 dark:bg-slate-900/90 backdrop-blur-xl border border-border/70 shadow-2xl rounded-full text-xs select-none max-w-[95vw] overflow-x-auto">
+            {/* Left: Select & Pan */}
+            <div className="flex items-center gap-0.5 bg-muted/60 p-0.5 rounded-full shrink-0">
+              <Button
+                variant="ghost"
+                size="icon"
+                className={`h-7 w-7 rounded-full transition-all ${
+                  currentTool === 'select'
+                    ? 'bg-slate-900 text-white dark:bg-white dark:text-slate-950 shadow-md font-bold scale-105'
+                    : 'text-muted-foreground hover:text-foreground hover:bg-background/60'
+                }`}
+                onClick={() => setCurrentTool('select')}
+                title="Select / Move (V)"
+              >
+                <MousePointer2 className="w-3.5 h-3.5" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                className={`h-7 w-7 rounded-full transition-all ${
+                  currentTool === 'pan'
+                    ? 'bg-slate-900 text-white dark:bg-white dark:text-slate-950 shadow-md font-bold scale-105'
+                    : 'text-muted-foreground hover:text-foreground hover:bg-background/60'
+                }`}
+                onClick={() => setCurrentTool('pan')}
+                title="Pan Canvas (H)"
+              >
+                <Hand className="w-3.5 h-3.5" />
+              </Button>
+            </div>
+
+            <Separator orientation="vertical" className="h-5 shrink-0" />
+
+            {/* Mode-Specific Tool Buttons */}
+            {editorMode === 'view' && (
+              <div className="flex items-center gap-1 shrink-0">
+                <Button variant="ghost" size="sm" className="h-7 px-2.5 rounded-full text-xs gap-1.5 font-medium hover:bg-muted" onClick={handleFitToWidth}>
+                  <Maximize2 className="w-3.5 h-3.5" /> <span>Fit Width</span>
+                </Button>
+                <Button variant="ghost" size="icon" className="h-7 w-7 rounded-full" onClick={() => setZoom(Math.max(0.2, zoom - 0.1))}>
+                  <ZoomOut className="w-3.5 h-3.5" />
+                </Button>
+                <span className="text-[11px] font-mono text-muted-foreground w-9 text-center">{Math.round(zoom * 100)}%</span>
+                <Button variant="ghost" size="icon" className="h-7 w-7 rounded-full" onClick={() => setZoom(Math.min(3, zoom + 0.1))}>
+                  <ZoomIn className="w-3.5 h-3.5" />
+                </Button>
+                <Button variant="ghost" size="icon" className="h-7 w-7 rounded-full" onClick={() => setZoom(1)} title="Reset zoom (100%)">
+                  <RotateCcw className="w-3.5 h-3.5" />
+                </Button>
+              </div>
+            )}
+
+            {editorMode === 'annotate' && (
+              <div className="flex items-center gap-1 shrink-0">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className={`h-7 px-3 rounded-full text-xs gap-1.5 font-semibold transition-all ${
+                    currentTool === 'highlight'
+                      ? 'bg-amber-500 hover:bg-amber-600 text-white shadow-md scale-105 ring-2 ring-amber-500/40'
+                      : 'text-amber-700 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-950/40 font-medium'
+                  }`}
+                  onClick={() => setCurrentTool('highlight')}
+                >
+                  <Highlighter className="w-3.5 h-3.5" /> <span>Highlight</span>
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className={`h-7 px-3 rounded-full text-xs gap-1.5 font-semibold transition-all ${
+                    currentTool === 'text'
+                      ? 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-md scale-105 ring-2 ring-emerald-500/40'
+                      : 'text-foreground hover:bg-emerald-50 dark:hover:bg-emerald-950/30 font-medium'
+                  }`}
+                  onClick={() => setCurrentTool('text')}
+                >
+                  <Type className="w-3.5 h-3.5" /> <span>Text</span>
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className={`h-7 px-3 rounded-full text-xs gap-1.5 font-semibold transition-all ${
+                    currentTool === 'draw'
+                      ? 'bg-indigo-600 hover:bg-indigo-700 text-white shadow-md scale-105 ring-2 ring-indigo-500/40'
+                      : 'text-foreground hover:bg-indigo-50 dark:hover:bg-indigo-950/30 font-medium'
+                  }`}
+                  onClick={() => setCurrentTool('draw')}
+                >
+                  <PenTool className="w-3.5 h-3.5" /> <span>Draw</span>
+                </Button>
+
+                {/* Shapes dropdown */}
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className={`h-7 px-2.5 rounded-full text-xs gap-1 font-semibold transition-all ${
+                        ['rectangle', 'ellipse', 'line'].includes(currentTool)
+                          ? 'bg-violet-600 hover:bg-violet-700 text-white shadow-md scale-105 ring-2 ring-violet-500/40'
+                          : 'text-foreground hover:bg-violet-50 dark:hover:bg-violet-950/30 font-medium'
+                      }`}
+                    >
+                      {currentTool === 'ellipse' ? <Circle className="w-3.5 h-3.5" /> : currentTool === 'line' ? <ArrowUpRight className="w-3.5 h-3.5" /> : <Square className="w-3.5 h-3.5" />}
+                      <span>Shapes</span>
+                      <ChevronDown className="w-3 h-3 opacity-70" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="center" className="w-44">
+                    <DropdownMenuItem
+                      onClick={() => setCurrentTool('rectangle')}
+                      className={`gap-2 cursor-pointer text-xs ${currentTool === 'rectangle' ? 'bg-violet-100 dark:bg-violet-950/50 text-violet-700 dark:text-violet-300 font-semibold' : ''}`}
+                    >
+                      <Square className="w-4 h-4 text-violet-500" /><span>Rectangle</span><kbd className="ml-auto text-[10px] text-muted-foreground font-mono">R</kbd>
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      onClick={() => setCurrentTool('ellipse')}
+                      className={`gap-2 cursor-pointer text-xs ${currentTool === 'ellipse' ? 'bg-violet-100 dark:bg-violet-950/50 text-violet-700 dark:text-violet-300 font-semibold' : ''}`}
+                    >
+                      <Circle className="w-4 h-4 text-violet-500" /><span>Circle / Oval</span><kbd className="ml-auto text-[10px] text-muted-foreground font-mono">O</kbd>
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      onClick={() => setCurrentTool('line')}
+                      className={`gap-2 cursor-pointer text-xs ${currentTool === 'line' ? 'bg-violet-100 dark:bg-violet-950/50 text-violet-700 dark:text-violet-300 font-semibold' : ''}`}
+                    >
+                      <ArrowUpRight className="w-4 h-4 text-violet-500" /><span>Arrow / Line</span><kbd className="ml-auto text-[10px] text-muted-foreground font-mono">L</kbd>
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className={`h-7 px-3 rounded-full text-xs gap-1.5 font-semibold transition-all ${
+                    currentTool === 'eraser'
+                      ? 'bg-rose-600 hover:bg-rose-700 text-white shadow-md scale-105 ring-2 ring-rose-500/40'
+                      : 'text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/30 font-medium'
+                  }`}
+                  onClick={() => setCurrentTool('eraser')}
+                >
+                  <Eraser className="w-3.5 h-3.5" /> <span>Eraser</span>
+                </Button>
+
+                {/* Quick Color Swatches */}
+                <Separator orientation="vertical" className="h-5 shrink-0" />
+                <div className="flex items-center gap-1.5 px-1">
+                  {COLORS.slice(0, 5).map((c) => (
+                    <button
+                      key={c}
+                      className={`w-4 h-4 rounded-full transition-all ${
+                        drawColor === c
+                          ? 'scale-125 ring-2 ring-offset-2 ring-emerald-500 dark:ring-offset-slate-900 shadow-md'
+                          : 'opacity-70 hover:opacity-100 hover:scale-110 border border-border/40'
+                      }`}
+                      style={{ backgroundColor: c }}
+                      onClick={() => setDrawColor(c)}
+                      title={`Color: ${c}`}
+                    />
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {editorMode === 'edit' && (
+              <div className="flex items-center gap-1 shrink-0">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className={`h-7 px-3 rounded-full text-xs gap-1.5 font-semibold transition-all ${
+                    currentTool === 'editText'
+                      ? 'bg-blue-600 hover:bg-blue-700 text-white shadow-md scale-105 ring-2 ring-blue-500/40'
+                      : 'text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-950/30 font-medium'
+                  }`}
+                  onClick={() => setCurrentTool('editText')}
+                >
+                  <Pencil className="w-3.5 h-3.5" /> <span>Edit Text</span>
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className={`h-7 px-3 rounded-full text-xs gap-1.5 font-semibold transition-all ${
+                    currentTool === 'whiteout'
+                      ? 'bg-zinc-800 hover:bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900 shadow-md scale-105 ring-2 ring-zinc-500/40'
+                      : 'text-foreground hover:bg-muted font-medium'
+                  }`}
+                  onClick={() => setCurrentTool('whiteout')}
+                >
+                  <PenLine className="w-3.5 h-3.5" /> <span>Whiteout</span>
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className={`h-7 px-3 rounded-full text-xs gap-1.5 font-semibold transition-all ${
+                    currentTool === 'redact'
+                      ? 'bg-red-600 hover:bg-red-700 text-white shadow-md scale-105 ring-2 ring-red-500/40'
+                      : 'text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/30 font-medium'
+                  }`}
+                  onClick={() => setCurrentTool('redact')}
+                >
+                  <EyeOff className="w-3.5 h-3.5" /> <span>Redact</span>
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className={`h-7 px-3 rounded-full text-xs gap-1.5 font-semibold transition-all ${
+                    isCropping
+                      ? 'bg-teal-600 hover:bg-teal-700 text-white shadow-md scale-105 ring-2 ring-teal-500/40'
+                      : 'text-teal-600 dark:text-teal-400 hover:bg-teal-50 dark:hover:bg-teal-950/30 font-medium'
+                  }`}
+                  onClick={() => { setCropping(!isCropping); if (isCropping) setCropBox(null) }}
+                >
+                  <Crop className="w-3.5 h-3.5" /> <span>{isCropping ? 'Cancel Crop' : 'Crop'}</span>
+                </Button>
+              </div>
+            )}
+
+            {editorMode === 'sign' && (
+              <div className="flex items-center gap-1 shrink-0">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className={`h-7 px-3 rounded-full text-xs gap-1.5 font-semibold transition-all ${
+                    currentTool === 'signature'
+                      ? 'bg-purple-600 hover:bg-purple-700 text-white shadow-md scale-105 ring-2 ring-purple-500/40'
+                      : 'text-purple-600 dark:text-purple-400 hover:bg-purple-50 dark:hover:bg-purple-950/30 font-medium'
+                  }`}
+                  onClick={() => {
+                    if (!signatureData) { setShowSignaturePad(true); return }
+                    setCurrentTool('signature')
+                  }}
+                >
+                  <Stamp className="w-3.5 h-3.5" /> <span>Signature</span>
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className={`h-7 px-2.5 rounded-full text-xs gap-1.5 font-medium transition-all ${
+                    currentTool === 'image'
+                      ? 'bg-cyan-600 hover:bg-cyan-700 text-white shadow-md scale-105 ring-2 ring-cyan-500/40'
+                      : 'text-cyan-600 dark:text-cyan-400 hover:bg-cyan-50 dark:hover:bg-cyan-950/30'
+                  }`}
+                  onClick={() => fileInputRef.current?.click()}
+                >
+                  <ImagePlus className="w-3.5 h-3.5" /> <span>Image / Stamp</span>
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 px-2.5 rounded-full text-xs gap-1.5 font-medium text-emerald-600 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-950/30 transition-all hover:scale-105"
+                  onClick={handleInsertDateStamp}
+                >
+                  <Calendar className="w-3.5 h-3.5" /> <span>Date Stamp</span>
+                </Button>
+              </div>
+            )}
+          </div>
+
+          <div className="pdf-canvas-container shadow-2xl rounded-lg overflow-hidden relative border border-border/30 bg-white">
             {/* Text input overlay for add-text tool */}
             {textInput.visible && (
               <div className="absolute" style={{
@@ -2310,7 +2150,22 @@ export function PdfEditor() {
             )}
             <canvas ref={canvasRef} />
             <canvas ref={overlayCanvasRef} className="absolute top-0 left-0"
-              style={{ pointerEvents: currentTool === 'editText' ? 'none' : 'auto' }}
+              style={{
+                pointerEvents: currentTool === 'editText' ? 'none' : 'auto',
+                cursor: isPanMode
+                  ? (isPanning ? 'grabbing' : 'grab')
+                  : isCropping
+                  ? 'crosshair'
+                  : currentTool === 'text'
+                  ? 'text'
+                  : ['draw', 'rectangle', 'ellipse', 'line', 'whiteout', 'redact', 'highlight'].includes(currentTool)
+                  ? 'crosshair'
+                  : currentTool === 'eraser'
+                  ? 'cell'
+                  : currentTool === 'signature' || currentTool === 'image'
+                  ? 'copy'
+                  : 'default',
+              }}
               onMouseDown={(e) => { if (isPanMode) handlePanStart(e); else handlePointerDown(e) }}
               onMouseMove={(e) => { if (isPanning) handlePanMove(e); else handlePointerMove(e) }}
               onMouseUp={(e) => { if (isPanning) handlePanEnd(); else handlePointerUp(e) }}
@@ -2665,6 +2520,211 @@ export function PdfEditor() {
                 })
               }
             </div>
+
+            {/* Floating Selection Island for Non-Text Annotations */}
+            {selectedAnnot && selectedAnnot.pageNumber === currentPage && selectedAnnot.type !== 'text' && (
+              <div
+                className="absolute z-30 flex items-center gap-1.5 p-1 bg-background/95 dark:bg-slate-900/95 backdrop-blur-xl border border-border/80 shadow-2xl rounded-xl select-none animate-in fade-in zoom-in-95 pointer-events-auto"
+                style={{
+                  left: Math.max(10, selectedAnnot.x * zoom * 1.5),
+                  top: Math.max(10, selectedAnnot.y * zoom * 1.5 - 46),
+                }}
+                onMouseDown={(e) => e.stopPropagation()}
+              >
+                {/* Color selection for shapes / drawings */}
+                {['draw', 'rectangle', 'ellipse', 'line'].includes(selectedAnnot.type) && (
+                  <>
+                    <div className="flex items-center gap-1 px-1">
+                      {COLORS.slice(0, 5).map((c) => (
+                        <button
+                          key={c}
+                          className={`w-4 h-4 rounded-full border transition-all ${selectedAnnot.color === c ? 'scale-125 border-foreground shadow-xs' : 'border-transparent opacity-70 hover:opacity-100 hover:scale-110'}`}
+                          style={{ backgroundColor: c }}
+                          onClick={() => updateAnnotation(selectedAnnot.id, { color: c })}
+                        />
+                      ))}
+                    </div>
+                    <Separator orientation="vertical" className="h-4" />
+                    {/* Stroke width */}
+                    <div className="flex items-center gap-0.5">
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-6 w-6 rounded-md"
+                        onClick={() => {
+                          const nextW = Math.max(1, (selectedAnnot.strokeWidth || strokeWidth) - 1)
+                          setStrokeWidth(nextW)
+                          updateAnnotation(selectedAnnot.id, { strokeWidth: nextW })
+                        }}
+                      >
+                        <Minus className="w-3 h-3" />
+                      </Button>
+                      <span className="text-[11px] font-mono w-5 text-center">{selectedAnnot.strokeWidth || strokeWidth}</span>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-6 w-6 rounded-md"
+                        onClick={() => {
+                          const nextW = Math.min(20, (selectedAnnot.strokeWidth || strokeWidth) + 1)
+                          setStrokeWidth(nextW)
+                          updateAnnotation(selectedAnnot.id, { strokeWidth: nextW })
+                        }}
+                      >
+                        <Plus className="w-3 h-3" />
+                      </Button>
+                    </div>
+                    <Separator orientation="vertical" className="h-4" />
+                  </>
+                )}
+
+                {/* Size scaler for signature / image / whiteout / shapes */}
+                {['signature', 'image', 'whiteout', 'rectangle', 'ellipse'].includes(selectedAnnot.type) && (
+                  <>
+                    <span className="text-[10px] text-muted-foreground uppercase font-bold px-1">Size</span>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-6 w-6 rounded-md"
+                      onClick={() => {
+                        const w = selectedAnnot.width || 100
+                        const h = selectedAnnot.height || 50
+                        const ratio = h > 0 ? w / h : 1
+                        const newW = Math.max(20, w - 15)
+                        const newH = selectedAnnot.type === 'signature' || selectedAnnot.type === 'image' ? newW / ratio : Math.max(10, h - 10)
+                        saveToUndoStack()
+                        updateAnnotation(selectedAnnot.id, { width: newW, height: newH })
+                      }}
+                    >
+                      <Minus className="w-3 h-3" />
+                    </Button>
+                    <span className="text-[11px] font-mono text-muted-foreground px-1">{Math.round(selectedAnnot.width || 100)}px</span>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-6 w-6 rounded-md"
+                      onClick={() => {
+                        const w = selectedAnnot.width || 100
+                        const h = selectedAnnot.height || 50
+                        const ratio = h > 0 ? w / h : 1
+                        const newW = Math.min(800, w + 15)
+                        const newH = selectedAnnot.type === 'signature' || selectedAnnot.type === 'image' ? newW / ratio : Math.min(600, h + 10)
+                        saveToUndoStack()
+                        updateAnnotation(selectedAnnot.id, { width: newW, height: newH })
+                      }}
+                    >
+                      <Plus className="w-3 h-3" />
+                    </Button>
+                    <Separator orientation="vertical" className="h-4" />
+                  </>
+                )}
+
+                {/* Action button for Redact */}
+                {selectedAnnot.type === 'redact' && (
+                  <>
+                    <Button
+                      variant="destructive"
+                      size="sm"
+                      className="h-6 px-2 text-[11px] gap-1 rounded-md"
+                      disabled={processing === 'redact'}
+                      onClick={handleApplyRedaction}
+                    >
+                      {processing === 'redact' ? <Loader2 className="w-3 h-3 animate-spin" /> : <EyeOff className="w-3 h-3" />}
+                      <span>Apply Redact</span>
+                    </Button>
+                    <Separator orientation="vertical" className="h-4" />
+                  </>
+                )}
+
+                {/* Duplicate */}
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-6 w-6 rounded-md text-muted-foreground hover:text-foreground"
+                  title="Duplicate"
+                  onClick={() => {
+                    const newId = crypto.randomUUID()
+                    addAnnotation({
+                      ...selectedAnnot,
+                      id: newId,
+                      x: selectedAnnot.x + 15,
+                      y: selectedAnnot.y + 15,
+                    })
+                    setSelectedAnnotId(newId)
+                    showStatus('Annotation duplicated')
+                  }}
+                >
+                  <Copy className="w-3.5 h-3.5" />
+                </Button>
+
+                {/* Delete */}
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-6 w-6 rounded-md text-muted-foreground hover:text-destructive hover:bg-destructive/10"
+                  title="Delete"
+                  onClick={() => {
+                    removeAnnotation(selectedAnnot.id)
+                    setSelectedAnnotId(null)
+                    showStatus('Annotation deleted')
+                  }}
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                </Button>
+              </div>
+            )}
+          </div>
+
+          {/* ===== FLOATING BOTTOM PAGE CAPSULE ===== */}
+          <div className="fixed md:absolute bottom-4 left-1/2 -translate-x-1/2 z-30 flex items-center gap-2 px-3 py-1.5 bg-background/90 dark:bg-slate-900/90 backdrop-blur-xl border border-border/70 shadow-2xl rounded-full text-xs select-none">
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-6 w-6 rounded-full"
+              disabled={currentPage <= 1}
+              onClick={() => setCurrentPage(currentPage - 1)}
+            >
+              <ChevronLeft className="w-3.5 h-3.5" />
+            </Button>
+            <span className="text-xs font-medium px-1">
+              Page <span className="font-semibold text-foreground">{currentPage}</span> of {totalPages}
+            </span>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-6 w-6 rounded-full"
+              disabled={currentPage >= totalPages}
+              onClick={() => setCurrentPage(currentPage + 1)}
+            >
+              <ChevronRight className="w-3.5 h-3.5" />
+            </Button>
+            <Separator orientation="vertical" className="h-4" />
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-6 w-6 rounded-full"
+              onClick={() => setZoom(Math.max(0.2, zoom - 0.1))}
+              title="Zoom Out"
+            >
+              <Minus className="w-3 h-3" />
+            </Button>
+            <span className="font-mono text-[11px] text-muted-foreground w-8 text-center">{Math.round(zoom * 100)}%</span>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-6 w-6 rounded-full"
+              onClick={() => setZoom(Math.min(3, zoom + 0.1))}
+              title="Zoom In"
+            >
+              <Plus className="w-3 h-3" />
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-6 px-2 text-[11px] rounded-full text-muted-foreground hover:text-foreground font-medium"
+              onClick={handleFitToWidth}
+            >
+              Fit
+            </Button>
           </div>
         </div>
 
@@ -2720,19 +2780,26 @@ export function PdfEditor() {
           {/* Colors (horizontal scroll) */}
           <div className="flex items-center gap-2 overflow-x-auto py-1 px-1" style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}>
             <span className="text-[10px] text-muted-foreground uppercase font-bold shrink-0">Color:</span>
-            {COLORS.map((c) => (
-              <button
-                key={c}
-                className={`w-6 h-6 rounded-full border-2 shrink-0 transition-all ${(selectedAnnot ? selectedAnnot.color : drawColor) === c ? 'border-foreground scale-110 shadow-sm' : 'border-transparent hover:scale-105'}`}
-                style={{ backgroundColor: c }}
-                onClick={() => {
-                  setDrawColor(c)
-                  if (selectedAnnotId) {
-                    updateAnnotation(selectedAnnotId, { color: c })
-                  }
-                }}
-              />
-            ))}
+            {COLORS.map((c) => {
+              const isSelected = (selectedAnnot ? selectedAnnot.color : drawColor) === c
+              return (
+                <button
+                  key={c}
+                  className={`w-6 h-6 rounded-full shrink-0 transition-all ${
+                    isSelected
+                      ? 'scale-125 ring-2 ring-offset-2 ring-emerald-500 shadow-md'
+                      : 'border border-border/60 opacity-80 hover:opacity-100 hover:scale-110'
+                  }`}
+                  style={{ backgroundColor: c }}
+                  onClick={() => {
+                    setDrawColor(c)
+                    if (selectedAnnotId) {
+                      updateAnnotation(selectedAnnotId, { color: c })
+                    }
+                  }}
+                />
+              )
+            })}
           </div>
           
           {/* Stroke Width / Font controls */}
@@ -2788,8 +2855,13 @@ export function PdfEditor() {
                 {/* Bold / Italic controls */}
                 <div className="flex items-center gap-1 shrink-0">
                   <Button
-                    variant={(selectedAnnot?.type === 'text' ? !!selectedAnnot.bold : textBold) ? 'secondary' : 'ghost'}
-                    size="icon" className="h-7 w-7 font-bold text-xs"
+                    variant="ghost"
+                    size="icon"
+                    className={`h-7 w-7 font-bold text-xs rounded transition-all ${
+                      (selectedAnnot?.type === 'text' ? !!selectedAnnot.bold : textBold)
+                        ? 'bg-emerald-600 text-white shadow-xs'
+                        : 'text-muted-foreground hover:bg-muted'
+                    }`}
                     onClick={() => {
                       if (selectedAnnotId) {
                         const annot = annotations.find(a => a.id === selectedAnnotId)
@@ -2802,8 +2874,13 @@ export function PdfEditor() {
                     B
                   </Button>
                   <Button
-                    variant={(selectedAnnot?.type === 'text' ? !!selectedAnnot.italic : textItalic) ? 'secondary' : 'ghost'}
-                    size="icon" className="h-7 w-7 italic font-serif text-xs"
+                    variant="ghost"
+                    size="icon"
+                    className={`h-7 w-7 italic font-serif text-xs rounded transition-all ${
+                      (selectedAnnot?.type === 'text' ? !!selectedAnnot.italic : textItalic)
+                        ? 'bg-emerald-600 text-white shadow-xs'
+                        : 'text-muted-foreground hover:bg-muted'
+                    }`}
                     onClick={() => {
                       if (selectedAnnotId) {
                         const annot = annotations.find(a => a.id === selectedAnnotId)
@@ -2885,45 +2962,21 @@ export function PdfEditor() {
         </div>
       )}
 
-      {/* ===== BOTTOM TOOLBAR (Mobile) ===== */}
-      <div className="flex md:hidden items-center gap-1.5 px-3 py-2 border-t border-border/60 bg-background shrink-0 z-30 overflow-x-auto justify-start select-none" style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}>
-        {ALL_TOOLS.map((tool) => (
-          <Button
-            key={tool.id}
-            variant={currentTool === tool.id ? 'secondary' : 'ghost'}
-            size="sm"
-            className="shrink-0 h-9 px-3 gap-1.5 rounded-lg text-xs"
-            onClick={() => {
-              if (tool.id === 'signature' && !signatureData) { setShowSignaturePad(true); return }
-              if (tool.id === 'image' && !pendingImageData) { fileInputRef.current?.click(); return }
-              setCurrentTool(tool.id)
-            }}
-          >
-            <tool.icon className="w-4 h-4" />
-            <span>{tool.label}</span>
-          </Button>
-        ))}
-      </div>
-
-      {/* ===== STATUS BAR ===== */}
-      <div className="hidden md:flex items-center justify-between px-4 py-1 border-t border-border/40 bg-background shrink-0 text-xs text-muted-foreground">
-        <div className="flex items-center gap-3">
-          <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-500" /> {currentDocument?.fileName}</span>
-          <span>{totalPages} pages</span>
-          <span>{totalAnnotations} annotations</span>
-          <span>{textEdits.size} text edits</span>
-        </div>
+      {/* Floating Status Notification */}
+      <AnimatePresence>
         {statusMessage && (
-          <AnimatePresence><motion.div
-            initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 8 }}
-            className="text-xs text-emerald-600 dark:text-emerald-400 font-medium"
-          >{statusMessage}</motion.div></AnimatePresence>
+          <motion.div
+            initial={{ opacity: 0, y: 12, scale: 0.95 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 12, scale: 0.95 }}
+            className="fixed bottom-16 left-1/2 -translate-x-1/2 z-40 px-3.5 py-1.5 bg-foreground/90 text-background backdrop-blur-md rounded-full shadow-2xl text-xs font-medium flex items-center gap-2 pointer-events-none"
+          >
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+            {statusMessage}
+          </motion.div>
         )}
-        <div className="flex items-center gap-2">
-          <span>{Math.round(zoom * 100)}%</span>
-          <span>Page {currentPage}/{totalPages}</span>
-        </div>
-      </div>
+      </AnimatePresence>
+
       {/* Signature Pad Dialog */}
       <SignaturePad />
 
