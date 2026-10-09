@@ -21,7 +21,7 @@ import {
   XCircle, Pencil, EyeOff, PenLine, Stamp, Hand, Droplets, Crop,
   ImagePlus, Hash, Shield, FileOutput, Copy, Scissors, GripVertical,
   MoveHorizontal, CheckCircle2, Loader2, Settings2, ScanText, Sparkles, ChevronDown,
-  Eye, Calendar, Check,
+  Eye, Calendar, Check, ScrollText, BookOpen,
 } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import * as pdfjsLib from 'pdfjs-dist'
@@ -101,8 +101,24 @@ export function PdfEditor() {
     saveToUndoStack,
   } = useAppStore()
 
-  const canvasRef = useRef<HTMLCanvasElement>(null)
-  const overlayCanvasRef = useRef<HTMLCanvasElement>(null)
+  const [scrollMode, setScrollMode] = useState<'continuous' | 'single'>('continuous')
+  const canvasRefs = useRef<{ [key: number]: HTMLCanvasElement | null }>({})
+  const overlayCanvasRefs = useRef<{ [key: number]: HTMLCanvasElement | null }>({})
+  const renderTasksRef = useRef<{ [key: number]: pdfjsLib.RenderTask | null }>({})
+  const activeInteractionPageRef = useRef<number>(1)
+
+  // Backward-compatible getters for existing single-page helpers
+  const canvasRef = {
+    get current(): HTMLCanvasElement | null {
+      return canvasRefs.current[currentPage] || Object.values(canvasRefs.current)[0] || null
+    }
+  }
+  const overlayCanvasRef = {
+    get current(): HTMLCanvasElement | null {
+      return overlayCanvasRefs.current[currentPage] || Object.values(overlayCanvasRefs.current)[0] || null
+    }
+  }
+
   const containerRef = useRef<HTMLDivElement>(null)
   const pdfDocRef = useRef<pdfjsLib.PDFDocumentProxy | null>(null)
   const pdfBytesRef = useRef<Uint8Array | null>(null)
@@ -319,46 +335,57 @@ export function PdfEditor() {
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [selectedAnnotId, removeAnnotation])
 
-  // Render current page
-  const renderPage = useCallback(async () => {
+  // Render a single PDF page into its designated canvas
+  const renderSinglePage = useCallback(async (pageNumber: number) => {
     const pdf = pdfDocRef.current
-    if (!pdf || !canvasRef.current) return
-    // Guard stale/out-of-range page numbers during a document swap (redaction/
-    // OCR reload, page delete) — getPage() throws "Invalid page request" otherwise.
-    if (currentPage < 1 || currentPage > pdf.numPages) return
-    // Cancel any in-flight render on this canvas before starting a new one,
-    // otherwise pdf.js throws "same canvas during multiple render() operations".
-    if (renderTaskRef.current) {
-      try { renderTaskRef.current.cancel() } catch { /* already settled */ }
-      renderTaskRef.current = null
+    const canvas = canvasRefs.current[pageNumber]
+    if (!pdf || !canvas || pageNumber < 1 || pageNumber > pdf.numPages) return
+
+    if (renderTasksRef.current[pageNumber]) {
+      try { renderTasksRef.current[pageNumber]?.cancel() } catch { /* settled */ }
+      renderTasksRef.current[pageNumber] = null
     }
-    setIsRendering(true)
+
     try {
-      const page = await pdf.getPage(currentPage)
-      const rotation = pageRotations.get(currentPage) || 0
+      const page = await pdf.getPage(pageNumber)
+      const rotation = pageRotations.get(pageNumber) || 0
       const viewport = page.getViewport({ scale: zoom * 1.5, rotation })
-      const canvas = canvasRef.current
       canvas.width = viewport.width
       canvas.height = viewport.height
       const ctx = canvas.getContext('2d')!
       const task = page.render({ canvasContext: ctx, viewport })
-      renderTaskRef.current = task
+      renderTasksRef.current[pageNumber] = task
       await task.promise
-      renderTaskRef.current = null
-      renderAnnotations()
+      renderTasksRef.current[pageNumber] = null
+      renderPageAnnotations(pageNumber)
     } catch (err: any) {
-      // A cancelled render is expected when pages/zoom change quickly.
-      if (err?.name !== 'RenderingCancelledException') console.error('Failed to render page:', err)
+      if (err?.name !== 'RenderingCancelledException') {
+        console.error(`Failed to render page ${pageNumber}:`, err)
+      }
+    }
+  }, [zoom, pdfReady, pageRotations])
+
+  // Render pages based on current scroll mode
+  const renderPages = useCallback(async () => {
+    const pdf = pdfDocRef.current
+    if (!pdf || totalPages === 0) return
+    setIsRendering(true)
+    try {
+      const pages = scrollMode === 'continuous'
+        ? (pageOrder.length > 0 ? pageOrder : Array.from({ length: totalPages }, (_, i) => i + 1))
+        : [currentPage]
+      await Promise.all(pages.map(p => renderSinglePage(p)))
     } finally {
       setIsRendering(false)
     }
-  }, [currentPage, zoom, pdfReady, pageRotations])
+  }, [scrollMode, totalPages, pageOrder, currentPage, renderSinglePage])
 
-  useEffect(() => { renderPage() }, [renderPage])
-  // Render annotations overlay
-  const renderAnnotations = useCallback(() => {
-    const overlay = overlayCanvasRef.current
-    const canvas = canvasRef.current
+  useEffect(() => { renderPages() }, [renderPages])
+
+  // Render annotations overlay for a specific page
+  const renderPageAnnotations = useCallback((pageNumber: number) => {
+    const overlay = overlayCanvasRefs.current[pageNumber]
+    const canvas = canvasRefs.current[pageNumber]
     if (!overlay || !canvas) return
     overlay.width = canvas.width
     overlay.height = canvas.height
@@ -367,7 +394,7 @@ export function PdfEditor() {
 
     // Render text edit whiteouts first
     for (const [, edit] of textEdits) {
-      if (edit.original.pageNumber !== currentPage) continue
+      if (edit.original.pageNumber !== pageNumber) continue
       const orig = edit.original
       ctx.save()
       ctx.fillStyle = 'white'
@@ -376,7 +403,7 @@ export function PdfEditor() {
     }
 
     // Render crop box
-    if (isCropping && cropBox) {
+    if (isCropping && cropBox && currentPage === pageNumber) {
       ctx.save()
       ctx.strokeStyle = '#10b981'
       ctx.lineWidth = 2
@@ -385,14 +412,14 @@ export function PdfEditor() {
       ctx.setLineDash([])
       // Dim outside area
       ctx.fillStyle = 'rgba(0,0,0,0.25)'
-      ctx.fillRect(0, 0, overlay.width, cropBox.y * scale) // top
-      ctx.fillRect(0, (cropBox.y + cropBox.height) * scale, overlay.width, overlay.height - (cropBox.y + cropBox.height) * scale) // bottom
-      ctx.fillRect(0, cropBox.y * scale, cropBox.x * scale, cropBox.height * scale) // left
-      ctx.fillRect((cropBox.x + cropBox.width) * scale, cropBox.y * scale, overlay.width - (cropBox.x + cropBox.width) * scale, cropBox.height * scale) // right
+      ctx.fillRect(0, 0, overlay.width, cropBox.y * scale)
+      ctx.fillRect(0, (cropBox.y + cropBox.height) * scale, overlay.width, overlay.height - (cropBox.y + cropBox.height) * scale)
+      ctx.fillRect(0, cropBox.y * scale, cropBox.x * scale, cropBox.height * scale)
+      ctx.fillRect((cropBox.x + cropBox.width) * scale, cropBox.y * scale, overlay.width - (cropBox.x + cropBox.width) * scale, cropBox.height * scale)
       ctx.restore()
     }
 
-    const pageAnnots = annotations.filter((a) => a.pageNumber === currentPage)
+    const pageAnnots = annotations.filter((a) => a.pageNumber === pageNumber)
     for (const annot of pageAnnots) {
       ctx.save()
       switch (annot.type) {
@@ -411,10 +438,9 @@ export function PdfEditor() {
             ctx.stroke()
           }
           break
-        case 'text': {
+        case 'text':
           // Rendered as interactive HTML elements in the overlay layer
           break
-        }
         case 'rectangle':
           ctx.strokeStyle = annot.color
           ctx.lineWidth = (annot.strokeWidth || 2) * scale
@@ -487,20 +513,16 @@ export function PdfEditor() {
       ctx.restore()
     }
 
-    // Draw selection border for selected annotation
+    // Draw selection border for selected annotation on this page
     if (selectedAnnotId) {
       const selectedAnnot = annotations.find(a => a.id === selectedAnnotId)
-      if (selectedAnnot && selectedAnnot.pageNumber === currentPage) {
+      if (selectedAnnot && selectedAnnot.pageNumber === pageNumber && selectedAnnot.type !== 'text') {
         ctx.save()
         ctx.strokeStyle = '#3b82f6'
         ctx.lineWidth = 1.5
         ctx.setLineDash([4, 3])
         let x = selectedAnnot.x, y = selectedAnnot.y, w = selectedAnnot.width || 100, h = selectedAnnot.height || 50
-        if (selectedAnnot.type === 'text') {
-          h = selectedAnnot.fontSize || 16
-          w = (selectedAnnot.content?.length || 5) * h * 0.6
-          y = selectedAnnot.y - h
-        } else if (selectedAnnot.type === 'draw' && selectedAnnot.points && selectedAnnot.points.length > 0) {
+        if (selectedAnnot.type === 'draw' && selectedAnnot.points && selectedAnnot.points.length > 0) {
           const xs = selectedAnnot.points.map(p => p.x)
           const ys = selectedAnnot.points.map(p => p.y)
           const minX = Math.min(...xs), maxX = Math.max(...xs)
@@ -510,8 +532,7 @@ export function PdfEditor() {
         ctx.strokeRect(x * scale - 4, y * scale - 4, w * scale + 8, h * scale + 8)
 
         // Draw resize handle at bottom-right corner for resizable annotations
-        // (all except text, draw, and line)
-        if (selectedAnnot.type !== 'text' && selectedAnnot.type !== 'draw' && selectedAnnot.type !== 'line') {
+        if (selectedAnnot.type !== 'draw' && selectedAnnot.type !== 'line') {
           ctx.setLineDash([])
           ctx.fillStyle = '#3b82f6'
           ctx.strokeStyle = '#ffffff'
@@ -529,10 +550,17 @@ export function PdfEditor() {
     }
   }, [annotations, currentPage, zoom, textEdits, isCropping, cropBox, selectedAnnotId])
 
-  useEffect(() => { renderAnnotations() }, [renderAnnotations])
+  const renderAllAnnotations = useCallback(() => {
+    const pages = scrollMode === 'continuous'
+      ? (pageOrder.length > 0 ? pageOrder : Array.from({ length: totalPages }, (_, i) => i + 1))
+      : [currentPage]
+    pages.forEach(p => renderPageAnnotations(p))
+  }, [scrollMode, pageOrder, totalPages, currentPage, renderPageAnnotations])
 
-  const getCanvasCoords = (e: React.MouseEvent | React.TouchEvent) => {
-    const overlay = overlayCanvasRef.current
+  useEffect(() => { renderAllAnnotations() }, [renderAllAnnotations])
+
+  const getCanvasCoords = (e: React.MouseEvent | React.TouchEvent, pageNum: number = currentPage) => {
+    const overlay = overlayCanvasRefs.current[pageNum] || overlayCanvasRef.current
     if (!overlay) return { x: 0, y: 0 }
     const rect = overlay.getBoundingClientRect()
     let clientX: number, clientY: number
@@ -545,17 +573,21 @@ export function PdfEditor() {
     // Handled by HTML overlay
   }
 
-  const handlePointerDown = (e: React.MouseEvent | React.TouchEvent) => {
+  const handlePointerDown = (e: React.MouseEvent | React.TouchEvent, pageNum: number = currentPage) => {
+    activeInteractionPageRef.current = pageNum
+    if (currentPage !== pageNum) {
+      setCurrentPage(pageNum)
+    }
     if (currentTool === 'eraser' || currentTool === 'editText' || currentTool === 'pan') return
     if ('button' in e && e.button !== 0) return
 
-    const coords = getCanvasCoords(e)
+    const coords = getCanvasCoords(e, pageNum)
 
     if (currentTool === 'select') {
       // Check if user clicked the resize handle of the selected annotation
       if (selectedAnnotId) {
         const selectedAnnot = annotations.find(a => a.id === selectedAnnotId)
-        if (selectedAnnot && selectedAnnot.pageNumber === currentPage) {
+        if (selectedAnnot && selectedAnnot.pageNumber === pageNum) {
           const scale = zoom * 1.5
           let x = selectedAnnot.x, y = selectedAnnot.y, w = selectedAnnot.width || 100, h = selectedAnnot.height || 50
           if (selectedAnnot.type !== 'text' && selectedAnnot.type !== 'draw' && selectedAnnot.type !== 'line') {
@@ -580,7 +612,7 @@ export function PdfEditor() {
         }
       }
 
-      const pageAnnots = annotations.filter((a) => a.pageNumber === currentPage)
+      const pageAnnots = annotations.filter((a) => a.pageNumber === pageNum)
       for (let i = pageAnnots.length - 1; i >= 0; i--) {
         const annot = pageAnnots[i]
         if (annot.type === 'text') continue // Handled by HTML overlay
@@ -618,7 +650,7 @@ export function PdfEditor() {
       if (!signatureData) { setShowSignaturePad(true); return }
       const newId = crypto.randomUUID()
       addAnnotation({
-        id: newId, type: 'signature', pageNumber: currentPage,
+        id: newId, type: 'signature', pageNumber: pageNum,
         x: coords.x, y: coords.y, width: 150, height: 50, color: '#000000',
         signatureData,
       })
@@ -632,7 +664,7 @@ export function PdfEditor() {
       if (!pendingImageData) { fileInputRef.current?.click(); return }
       const newId = crypto.randomUUID()
       addAnnotation({
-        id: newId, type: 'image', pageNumber: currentPage,
+        id: newId, type: 'image', pageNumber: pageNum,
         x: coords.x, y: coords.y, width: 200, height: 150, color: '#000000',
         imageData: pendingImageData,
       })
@@ -657,10 +689,12 @@ export function PdfEditor() {
     }
   }
 
-  const handlePointerMove = (e: React.MouseEvent | React.TouchEvent) => {
+  const handlePointerMove = (e: React.MouseEvent | React.TouchEvent, pageNum: number = currentPage) => {
+    const activePage = pageNum || activeInteractionPageRef.current || currentPage
+
     // 1. Resizing logic
     if (isResizingAnnot && resizeAnnotStart && selectedAnnotId) {
-      const coords = getCanvasCoords(e)
+      const coords = getCanvasCoords(e, activePage)
       const dx = coords.x - resizeAnnotStart.x
       const dy = coords.y - resizeAnnotStart.y
       
@@ -691,7 +725,7 @@ export function PdfEditor() {
 
     // 2. Dragging logic
     if (isDraggingAnnot && dragAnnotStart && selectedAnnotId) {
-      const coords = getCanvasCoords(e)
+      const coords = getCanvasCoords(e, activePage)
       const dx = coords.x - dragAnnotStart.x
       const dy = coords.y - dragAnnotStart.y
       if (dragAnnotStart.points) {
@@ -712,14 +746,14 @@ export function PdfEditor() {
     // 3. Hover resize cursor logic
     if (!isDrawing && !isDraggingAnnot && !isResizingAnnot && selectedAnnotId) {
       const selectedAnnot = annotations.find(a => a.id === selectedAnnotId)
-      if (selectedAnnot && selectedAnnot.pageNumber === currentPage) {
+      if (selectedAnnot && selectedAnnot.pageNumber === activePage) {
         if (selectedAnnot.type !== 'text' && selectedAnnot.type !== 'draw' && selectedAnnot.type !== 'line') {
-          const coords = getCanvasCoords(e)
+          const coords = getCanvasCoords(e, activePage)
           const scale = zoom * 1.5
           const handleX = selectedAnnot.x + (selectedAnnot.width || 100) + 4 / scale
           const handleY = selectedAnnot.y + (selectedAnnot.height || 50) + 4 / scale
           const dist = Math.sqrt((coords.x - handleX) ** 2 + (coords.y - handleY) ** 2)
-          const overlay = overlayCanvasRef.current
+          const overlay = overlayCanvasRefs.current[activePage] || overlayCanvasRef.current
           if (overlay) {
             if (dist <= 12 / scale) {
               overlay.style.cursor = 'se-resize'
@@ -734,7 +768,7 @@ export function PdfEditor() {
 
     if (!isDrawing || !drawStartRef.current) return
     if (currentTool === 'pan') return
-    const coords = getCanvasCoords(e)
+    const coords = getCanvasCoords(e, activePage)
     const scale = zoom * 1.5
 
     if (currentTool === 'draw') {
@@ -744,13 +778,13 @@ export function PdfEditor() {
     // Live preview for shape/rect/ellipse/line/highlight/redact/whiteout/crop
     const shapeTools = ['rectangle', 'ellipse', 'highlight', 'redact', 'whiteout', 'line']
     if (shapeTools.includes(currentTool) || isCropping) {
-      const overlay = overlayCanvasRef.current
-      const canvas = canvasRef.current
+      const overlay = overlayCanvasRefs.current[activePage] || overlayCanvasRef.current
+      const canvas = canvasRefs.current[activePage] || canvasRef.current
       if (!overlay || !canvas) return
       overlay.width = canvas.width; overlay.height = canvas.height
       const ctx = overlay.getContext('2d')!
-      // Re-render existing annotations first
-      renderAnnotations()
+      // Re-render existing annotations for this page first
+      renderPageAnnotations(activePage)
       // Draw preview shape
       const w = coords.x - drawStartRef.current.x
       const h = coords.y - drawStartRef.current.y
@@ -780,7 +814,9 @@ export function PdfEditor() {
     }
   }
 
-  const handlePointerUp = (e: React.MouseEvent | React.TouchEvent) => {
+  const handlePointerUp = (e: React.MouseEvent | React.TouchEvent, pageNum: number = currentPage) => {
+    const activePage = pageNum || activeInteractionPageRef.current || currentPage
+
     if (isResizingAnnot) {
       setIsResizingAnnot(false)
       setResizeAnnotStart(null)
@@ -796,7 +832,7 @@ export function PdfEditor() {
 
     // Handle crop box
     if (isCropping && drawStartRef.current) {
-      const coords = getCanvasCoords(e)
+      const coords = getCanvasCoords(e, activePage)
       const w = Math.abs(coords.x - drawStartRef.current.x)
       const h = Math.abs(coords.y - drawStartRef.current.y)
       if (w > 5 && h > 5) {
@@ -814,17 +850,17 @@ export function PdfEditor() {
 
     if (currentTool === 'draw' && currentDrawingPoints.length > 1) {
       addAnnotation({
-        id: crypto.randomUUID(), type: 'draw', pageNumber: currentPage,
+        id: crypto.randomUUID(), type: 'draw', pageNumber: activePage,
         x: currentDrawingPoints[0].x, y: currentDrawingPoints[0].y,
         color: drawColor, strokeWidth, points: [...currentDrawingPoints],
       })
       setCurrentDrawingPoints([])
     } else if (['rectangle', 'ellipse', 'highlight', 'redact', 'whiteout', 'line'].includes(currentTool)) {
-      const coords = getCanvasCoords(e)
+      const coords = getCanvasCoords(e, activePage)
       const w = coords.x - drawStartRef.current.x
       const h = coords.y - drawStartRef.current.y
       if (Math.abs(w) > 2 || Math.abs(h) > 2) {
-        const base = { id: crypto.randomUUID(), pageNumber: currentPage, color: drawColor, strokeWidth }
+        const base = { id: crypto.randomUUID(), pageNumber: activePage, color: drawColor, strokeWidth }
         if (['highlight', 'rectangle', 'ellipse', 'redact', 'whiteout'].includes(currentTool)) {
           addAnnotation({ ...base, type: currentTool as PDFAnnotation['type'], x: Math.min(drawStartRef.current.x, coords.x), y: Math.min(drawStartRef.current.y, coords.y), width: Math.abs(w), height: Math.abs(h) })
         } else if (currentTool === 'line') {
@@ -835,11 +871,11 @@ export function PdfEditor() {
     drawStartRef.current = null; setIsDrawing(false)
   }
 
-  const handleEraserClick = (e: React.MouseEvent) => {
+  const handleEraserClick = (e: React.MouseEvent, pageNum: number = currentPage) => {
     if (currentTool !== 'eraser') return
-    const coords = getCanvasCoords(e)
+    const coords = getCanvasCoords(e, pageNum)
     const scale = zoom * 1.5
-    const pageAnnots = annotations.filter((a) => a.pageNumber === currentPage)
+    const pageAnnots = annotations.filter((a) => a.pageNumber === pageNum)
     for (const annot of pageAnnots) {
       let hit = false
       if (annot.type === 'draw' && annot.points) {
@@ -861,22 +897,20 @@ export function PdfEditor() {
     }
   }
 
-  // handleTextSubmit replaced by textSubmitRef
-
-  const handleCanvasClick = (e: React.MouseEvent) => {
+  const handleCanvasClick = (e: React.MouseEvent, pageNum: number = currentPage) => {
+    if (currentPage !== pageNum) {
+      setCurrentPage(pageNum)
+    }
     if (currentTool === 'text') {
-      // If a text box is already open for editing, this click is the user
-      // committing it (the blur handler does the commit) — don't also spawn a
-      // brand-new box, or every "click away" would duplicate the text.
       if (editingAnnotId || isSpawningRef.current) return
       isSpawningRef.current = true
 
-      const coords = getCanvasCoords(e)
+      const coords = getCanvasCoords(e, pageNum)
       const newAnnotId = crypto.randomUUID()
       addAnnotation({
         id: newAnnotId,
         type: 'text',
-        pageNumber: currentPage,
+        pageNumber: pageNum,
         x: coords.x,
         y: coords.y,
         content: 'Type text...',
@@ -893,17 +927,10 @@ export function PdfEditor() {
         isSpawningRef.current = false
       }, 300)
 
-      // Drop back to the Select tool so subsequent clicks edit/move this box
-      // instead of dropping more text boxes onto the page.
       setCurrentTool('select')
     }
-    if (currentTool === 'eraser') handleEraserClick(e)
+    if (currentTool === 'eraser') handleEraserClick(e, pageNum)
   }
-
-  // NOTE: the previous effect that synced the selected text annotation with the
-  // global toolbar state was removed — it called updateAnnotation() with
-  // `annotations` in its deps, causing an infinite render loop, and it duplicated
-  // the per-annotation floating toolbar (which edits the annotation directly).
 
   const handleStartDrag = (e: React.MouseEvent, annot: PDFAnnotation) => {
     if (currentTool !== 'select' && currentTool !== 'text') return
@@ -957,6 +984,10 @@ export function PdfEditor() {
       return
     }
 
+    if (scrollMode === 'continuous') {
+      return
+    }
+
     const container = containerRef.current
     if (!container) return
 
@@ -965,7 +996,7 @@ export function PdfEditor() {
     const isAtTop = scrollTop <= 8
     const isScrollable = scrollHeight > clientHeight + 10
 
-    // If scrolling down at the bottom of the page (or if the page fits on screen)
+    // If scrolling down at the bottom of the page in single page mode
     if (e.deltaY > 0 && (isAtBottom || !isScrollable)) {
       if (currentPage < totalPages && !wheelCooldownRef.current) {
         wheelAccumulatorRef.current += e.deltaY
@@ -980,7 +1011,7 @@ export function PdfEditor() {
         }
       }
     }
-    // If scrolling up at the top of the page (or if the page fits on screen)
+    // If scrolling up at the top of the page in single page mode
     else if (e.deltaY < 0 && (isAtTop || !isScrollable)) {
       if (currentPage > 1 && !wheelCooldownRef.current) {
         wheelAccumulatorRef.current += e.deltaY
@@ -998,6 +1029,39 @@ export function PdfEditor() {
       }
     } else {
       wheelAccumulatorRef.current = 0
+    }
+  }
+
+  // Scroll synchronization for Continuous Multi-Page mode
+  const handleScroll = () => {
+    if (scrollMode !== 'continuous' || !containerRef.current || totalPages <= 1) return
+    const container = containerRef.current
+    const containerRect = container.getBoundingClientRect()
+    const centerY = containerRect.top + 160
+
+    const pages = pageOrder.length > 0 ? pageOrder : Array.from({ length: totalPages }, (_, i) => i + 1)
+    for (const p of pages) {
+      const el = document.getElementById(`pdf-page-${p}`)
+      if (el) {
+        const r = el.getBoundingClientRect()
+        if (r.top <= centerY && r.bottom >= centerY) {
+          if (currentPage !== p) {
+            setCurrentPage(p)
+          }
+          break
+        }
+      }
+    }
+  }
+
+  const handlePageSelect = (pageNumber: number) => {
+    const validPage = Math.max(1, Math.min(totalPages, pageNumber))
+    setCurrentPage(validPage)
+    if (scrollMode === 'continuous') {
+      const el = document.getElementById(`pdf-page-${validPage}`)
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      }
     }
   }
 
@@ -1564,6 +1628,9 @@ export function PdfEditor() {
   const selectedAnnot = selectedAnnotId ? annotations.find(a => a.id === selectedAnnotId) : null
   const pageAnnotations = annotations.filter((a) => a.pageNumber === currentPage)
   const totalAnnotations = annotations.length
+  const pagesToRender = scrollMode === 'continuous'
+    ? (pageOrder.length > 0 ? pageOrder : Array.from({ length: totalPages }, (_, i) => i + 1))
+    : [currentPage]
   const isEditTextMode = currentTool === 'editText'
   const isSignatureMode = currentTool === 'signature'
   const isRedactMode = currentTool === 'redact'
@@ -1839,7 +1906,7 @@ export function PdfEditor() {
                     const thumbAnnotCount = annotations.filter(a => a.pageNumber === thumb.page).length
                     const rotation = pageRotations.get(thumb.page) || 0
                     return (
-                      <button key={thumb.page} className={`w-full rounded-lg border-2 transition-all p-1 relative ${currentPage === thumb.page ? 'border-emerald-500 shadow-sm' : 'border-transparent hover:border-border'}`} onClick={() => setCurrentPage(thumb.page)}>
+                      <button key={thumb.page} className={`w-full rounded-lg border-2 transition-all p-1 relative ${currentPage === thumb.page ? 'border-emerald-500 shadow-sm' : 'border-transparent hover:border-border'}`} onClick={() => handlePageSelect(thumb.page)}>
                         <div className="relative w-full">
                           <img src={thumb.dataUrl} alt={`Page ${thumb.page}`} className="w-full rounded" style={rotation ? { transform: `rotate(${rotation}deg)` } : undefined} />
                           <div className="absolute bottom-1 right-1 bg-black/60 text-white text-[10px] px-1.5 py-0.5 rounded">{thumb.page}</div>
@@ -1862,6 +1929,7 @@ export function PdfEditor() {
         <div
           ref={containerRef} className="flex-1 overflow-auto flex items-start justify-center p-2 sm:p-6 sm:pt-14 relative bg-slate-100/70 dark:bg-slate-950"
           onWheel={handleWheel}
+          onScroll={handleScroll}
           style={{ cursor: isPanMode ? 'grab' : isCropping ? 'crosshair' : undefined }}
         >
           {/* ===== FLOATING CAPSULE TOOLBAR (Figma / Apple Style) ===== */}
@@ -2122,596 +2190,668 @@ export function PdfEditor() {
             )}
           </div>
 
-          <div className="pdf-canvas-container shadow-2xl rounded-lg overflow-hidden relative border border-border/30 bg-white">
-            {/* Text input overlay for add-text tool */}
-            {textInput.visible && (
-              <div className="absolute" style={{
-                left: textInput.x * zoom * 1.5,
-                top: textInput.y * zoom * 1.5 - (selectedAnnot?.type === 'text' ? (selectedAnnot.fontSize || 16) : fontSize) * zoom * 1.5
-              }}>
-                <input type="text" autoFocus value={textInputValue} onChange={(e) => setTextInputValue(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === 'Enter') textSubmitRef.current(); if (e.key === 'Escape') setTextInput({ x: 0, y: 0, visible: false }) }}
-                  onBlur={() => textSubmitRef.current()}
-                  className="border-2 border-emerald-500 rounded px-2 py-1 bg-white/90 dark:bg-gray-900/90 backdrop-blur-sm outline-none"
-                  style={{
-                    fontSize: (selectedAnnot?.type === 'text' ? (selectedAnnot.fontSize || 16) : fontSize) * zoom * 1.5,
-                    color: selectedAnnot ? selectedAnnot.color : drawColor,
-                    fontFamily: (selectedAnnot?.type === 'text' ? (selectedAnnot.fontFamily || 'Helvetica') : fontFamily) === 'Courier' ? 'Courier New, monospace' : (selectedAnnot?.type === 'text' ? (selectedAnnot.fontFamily || 'Helvetica') : fontFamily) === 'TimesRoman' ? 'Times New Roman, serif' : 'Helvetica Neue, sans-serif',
-                    fontWeight: (selectedAnnot?.type === 'text' ? !!selectedAnnot.bold : textBold) ? 'bold' : 'normal',
-                    fontStyle: (selectedAnnot?.type === 'text' ? !!selectedAnnot.italic : textItalic) ? 'italic' : 'normal'
+          <div className={`flex flex-col items-center w-full ${scrollMode === 'continuous' ? 'gap-8 my-6 pb-24' : 'my-4 pb-20'}`}>
+            {pagesToRender.map((pageNum) => {
+              const isCurrent = currentPage === pageNum
+              const pageAnnots = annotations.filter(a => a.pageNumber === pageNum)
+
+              return (
+                <div
+                  id={`pdf-page-${pageNum}`}
+                  key={pageNum}
+                  className="pdf-page-wrapper flex flex-col items-center relative transition-all"
+                  onClick={() => {
+                    if (currentPage !== pageNum) {
+                      setCurrentPage(pageNum)
+                    }
                   }}
-                  placeholder="Type annotation..." />
-              </div>
-            )}
-            {isRendering && (
-              <div className="absolute inset-0 z-10 flex items-center justify-center bg-background/50 backdrop-blur-sm rounded-lg">
-                <div className="w-8 h-8 border-3 border-emerald-200 border-t-emerald-600 rounded-full animate-spin" />
-              </div>
-            )}
-            <canvas ref={canvasRef} />
-            <canvas ref={overlayCanvasRef} className="absolute top-0 left-0"
-              style={{
-                pointerEvents: currentTool === 'editText' ? 'none' : 'auto',
-                cursor: isPanMode
-                  ? (isPanning ? 'grabbing' : 'grab')
-                  : isCropping
-                  ? 'crosshair'
-                  : currentTool === 'text'
-                  ? 'text'
-                  : ['draw', 'rectangle', 'ellipse', 'line', 'whiteout', 'redact', 'highlight'].includes(currentTool)
-                  ? 'crosshair'
-                  : currentTool === 'eraser'
-                  ? 'cell'
-                  : currentTool === 'signature' || currentTool === 'image'
-                  ? 'copy'
-                  : 'default',
-              }}
-              onMouseDown={(e) => { if (isPanMode) handlePanStart(e); else handlePointerDown(e) }}
-              onMouseMove={(e) => { if (isPanning) handlePanMove(e); else handlePointerMove(e) }}
-              onMouseUp={(e) => { if (isPanning) handlePanEnd(); else handlePointerUp(e) }}
-              onMouseLeave={() => { if (isPanning) handlePanEnd(); else handlePointerUp({} as any) }}
-              onClick={handleCanvasClick}
-              onDoubleClick={handleCanvasDoubleClick}
-              onTouchStart={handlePointerDown} onTouchMove={handlePointerMove} onTouchEnd={handlePointerUp}
-            />
-            {/* Native text editing layer */}
-            <TextLayer pdfDoc={pdfDocRef.current} canvasEl={canvasRef.current} containerEl={containerRef.current} />
-            {/* Added text annotations HTML overlay */}
-            <div 
-              className="absolute top-0 left-0 w-full h-full pointer-events-none"
-              style={{ zIndex: 6 }}
-            >
-              {annotations
-                .filter((annot) => annot.type === 'text' && annot.pageNumber === currentPage)
-                .map((annot) => {
-                  const isEditing = editingAnnotId === annot.id
-                  const isSelected = selectedAnnotId === annot.id
-                  const isSelectOrTextTool = currentTool === 'select' || currentTool === 'text'
-                  
-                  // Coordinate scaling
-                  const scale = zoom * 1.5
-                  
-                  // Style mapping
-                  const getMetricFontKey = (family?: string) => {
-                    if (!family) return 'arimo'
-                    const key = family.toLowerCase()
-                    if (METRIC_FONTS[key]) return key
-                    return matchMetricFont(family)
-                  }
-                  
-                  const fontStyleKey = getMetricFontKey(annot.fontFamily)
-                  const cssFontFamily = METRIC_FONTS[fontStyleKey]?.cssName || 'Arimo'
-                  
-                  const style: React.CSSProperties = {
-                    position: 'absolute',
-                    left: annot.x * scale,
-                    top: annot.y * scale - (annot.fontSize || 16) * scale, // Subtract font size to align with canvas baseline drawing
-                    fontSize: (annot.fontSize || 16) * scale,
-                    fontFamily: cssFontFamily,
-                    fontWeight: annot.bold ? 'bold' : 'normal',
-                    fontStyle: annot.italic ? 'italic' : 'normal',
-                    color: annot.color,
-                    whiteSpace: 'pre',
-                    lineHeight: '1.2',
-                    minWidth: '30px',
-                    minHeight: '20px',
-                    pointerEvents: isSelectOrTextTool ? 'auto' : 'none',
-                    userSelect: isEditing ? 'text' : 'none',
-                  }
-                  
-                  if (isEditing) {
-                    return (
-                      <div
-                        key={`edit-${annot.id}`}
-                        contentEditable
-                        suppressContentEditableWarning
-                        onBlur={(e) => {
-                          const newText = e.currentTarget.textContent || ''
-                          if (newText.trim() === '' || newText === 'Type text...') {
-                            removeAnnotation(annot.id)
-                            showStatus('Text annotation removed')
-                          } else {
-                            updateAnnotation(annot.id, { content: newText })
-                            showStatus('Text annotation updated')
-                          }
-                          setEditingAnnotId(null)
-                        }}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter' && !e.shiftKey) {
-                            e.preventDefault()
-                            e.currentTarget.blur()
-                          }
-                          if (e.key === 'Escape') {
-                            e.preventDefault()
-                            e.currentTarget.textContent = annot.content || ''
-                            e.currentTarget.blur()
-                          }
-                        }}
-                        ref={(el) => {
-                          if (el) {
-                            if (document.activeElement !== el) {
-                              el.textContent = annot.content === 'Type text...' ? '' : (annot.content || '')
-                              el.focus()
-                              // Place the caret at the end so the user keeps
-                              // typing where they left off instead of having the
-                              // whole word selected (and replaced on next keypress).
-                              const range = document.createRange()
-                              range.selectNodeContents(el)
-                              range.collapse(false)
-                              const sel = window.getSelection()
-                              sel?.removeAllRanges()
-                              sel?.addRange(range)
-                            }
-                          }
-                        }}
-                        style={{
-                          ...style,
-                          background: 'rgba(255,255,255,0.92)',
-                          outline: '2px solid #10b981',
-                          outlineOffset: '1px',
-                          padding: '0 2px',
-                          borderRadius: '2px',
-                          boxShadow: '0 1px 4px rgba(0,0,0,0.1)',
-                          zIndex: 10,
-                        }}
-                      />
-                    )
-                  }
-                  
-                  return (
-                    <div
-                      key={`view-${annot.id}`}
-                      style={style}
-                      onMouseDown={(e) => handleStartDrag(e, annot)}
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        if (isSelectOrTextTool) {
-                          setSelectedAnnotId(annot.id)
-                        }
-                      }}
-                      onDoubleClick={(e) => {
-                        e.stopPropagation()
-                        if (isSelectOrTextTool) {
-                          setSelectedAnnotId(annot.id)
-                          setEditingAnnotId(annot.id)
-                        }
-                      }}
-                      className="group"
-                    >
-                      <span
-                        style={{
-                          outline: isSelected ? '1.5px dashed #10b981' : 'none',
-                          outlineOffset: '2px',
-                          display: 'inline-block',
-                          padding: '0 2px',
-                          borderRadius: '2px',
-                          cursor: isSelectOrTextTool ? 'move' : 'default',
-                        }}
-                        className="group-hover:outline group-hover:outline-1 group-hover:outline-emerald-300 group-hover:outline-dashed"
-                      >
-                        {annot.content || ' '}
-                      </span>
-
-                      {/* Floating Sejda-style Inline Toolbar */}
-                      {isSelected && (
-                        <div
-                          onMouseDown={(e) => e.stopPropagation()}
-                          className="absolute flex items-center gap-1.5 p-1 bg-white dark:bg-gray-900 border border-slate-200 dark:border-slate-800 shadow-xl rounded-lg z-50 select-none text-foreground font-sans pointer-events-auto"
-                          style={{
-                            left: 0,
-                            top: -46,
-                          }}
-                        >
-                          {/* Bold Button */}
-                          <button
-                            onClick={() => updateAnnotation(annot.id, { bold: !annot.bold })}
-                            className={`w-7 h-7 flex items-center justify-center rounded text-sm font-bold border border-transparent transition-colors hover:bg-slate-100 dark:hover:bg-slate-800 ${annot.bold ? 'bg-emerald-50 dark:bg-emerald-950/30 border-emerald-200 text-emerald-600' : 'text-slate-700 dark:text-slate-300'}`}
-                            title="Bold"
-                          >
-                            B
-                          </button>
-                          
-                          {/* Italic Button */}
-                          <button
-                            onClick={() => updateAnnotation(annot.id, { italic: !annot.italic })}
-                            className={`w-7 h-7 flex items-center justify-center rounded text-sm italic border border-transparent transition-colors hover:bg-slate-100 dark:hover:bg-slate-800 ${annot.italic ? 'bg-emerald-50 dark:bg-emerald-950/30 border-emerald-200 text-emerald-600' : 'text-slate-700 dark:text-slate-300'}`}
-                            title="Italic"
-                          >
-                            I
-                          </button>
-
-                          <span className="w-px h-5 bg-slate-200 dark:bg-slate-800" />
-
-                          {/* Font Size Selector */}
-                          <div className="relative flex items-center">
-                            <button
-                              onClick={() => {
-                                setAnnotSizeDropdownId(annotSizeDropdownId === annot.id ? null : annot.id)
-                                setAnnotFontDropdownId(null)
-                                setAnnotColorDropdownId(null)
-                              }}
-                              className="h-7 px-2 flex items-center gap-1 rounded text-xs border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 font-medium"
-                              title="Font Size"
-                            >
-                              <span>{Math.round(annot.fontSize || 16)}</span>
-                              <span className="text-[10px] text-slate-400">▼</span>
-                            </button>
-                            
-                            {annotSizeDropdownId === annot.id && (
-                              <div className="absolute top-8 left-0 flex flex-col max-h-48 overflow-y-auto bg-white dark:bg-gray-900 border border-slate-200 dark:border-slate-800 shadow-lg rounded-md z-50 p-1 min-w-[70px]">
-                                <input
-                                  type="number"
-                                  value={Math.round(annot.fontSize || 16)}
-                                  onChange={(e) => {
-                                    const val = parseInt(e.target.value) || 16
-                                    updateAnnotation(annot.id, { fontSize: val })
-                                  }}
-                                  className="w-full text-xs px-1.5 py-1 border border-slate-200 dark:border-slate-800 rounded bg-white dark:bg-gray-900 focus:outline-none focus:border-emerald-500 mb-1"
-                                  min="4"
-                                  max="120"
-                                />
-                                {[8, 9, 10, 11, 12, 14, 16, 18, 24, 30, 36, 48, 60, 72].map((sz) => (
-                                  <button
-                                    key={sz}
-                                    onClick={() => {
-                                      updateAnnotation(annot.id, { fontSize: sz })
-                                      setAnnotSizeDropdownId(null)
-                                    }}
-                                    className={`text-left text-xs px-2 py-1.5 rounded hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors ${Math.round(annot.fontSize || 16) === sz ? 'bg-emerald-50 dark:bg-emerald-950/30 text-emerald-600 font-semibold' : 'text-slate-700 dark:text-slate-300'}`}
-                                  >
-                                    {sz}
-                                  </button>
-                                ))}
-                              </div>
-                            )}
-                          </div>
-
-                          {/* Font Family Selector */}
-                          <div className="relative">
-                            <button
-                              onClick={() => {
-                                setAnnotFontDropdownId(annotFontDropdownId === annot.id ? null : annot.id)
-                                setAnnotSizeDropdownId(null)
-                                setAnnotColorDropdownId(null)
-                              }}
-                              className="h-7 px-2 flex items-center gap-1 rounded text-xs border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 font-medium max-w-[150px] truncate"
-                              title="Font Family"
-                            >
-                              <span>{METRIC_FONTS[fontStyleKey]?.displayName.split(' ')[0] || 'Arial'}</span>
-                              <span className="text-[10px] text-slate-400">▼</span>
-                            </button>
-                            
-                            {annotFontDropdownId === annot.id && (
-                              <div className="absolute top-8 left-0 flex flex-col bg-white dark:bg-gray-900 border border-slate-200 dark:border-slate-800 shadow-lg rounded-md z-50 p-1 min-w-[180px]">
-                                {Object.entries(METRIC_FONTS).map(([key, f]) => (
-                                  <button
-                                    key={key}
-                                    onClick={() => {
-                                      updateAnnotation(annot.id, { fontFamily: key })
-                                      setAnnotFontDropdownId(null)
-                                    }}
-                                    className={`text-left text-xs px-2.5 py-2 rounded hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors ${fontStyleKey === key ? 'bg-emerald-50 dark:bg-emerald-950/30 text-emerald-600 font-semibold' : 'text-slate-700 dark:text-slate-300'}`}
-                                    style={{ fontFamily: f.cssName }}
-                                  >
-                                    {f.displayName}
-                                  </button>
-                                ))}
-                              </div>
-                            )}
-                          </div>
-
-                          <span className="w-px h-5 bg-slate-200 dark:bg-slate-800" />
-
-                          {/* Color Picker */}
-                          <div className="relative">
-                            <button
-                              onClick={() => {
-                                setAnnotColorDropdownId(annotColorDropdownId === annot.id ? null : annot.id)
-                                setAnnotFontDropdownId(null)
-                                setAnnotSizeDropdownId(null)
-                              }}
-                              className="w-7 h-7 flex items-center justify-center rounded border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900 hover:bg-slate-50 dark:hover:bg-slate-800"
-                              title="Text Color"
-                            >
-                              <span
-                                className="w-4 h-4 rounded-full border border-slate-300"
-                                style={{ backgroundColor: annot.color }}
-                              />
-                            </button>
-                            
-                            {annotColorDropdownId === annot.id && (
-                              <div className="absolute top-8 left-0 bg-white dark:bg-gray-900 border border-slate-200 dark:border-slate-800 shadow-lg rounded-md z-50 p-2 min-w-[150px] flex flex-col gap-2">
-                                <div className="grid grid-cols-5 gap-1">
-                                  {['#000000', '#ef4444', '#f59e0b', '#10b981', '#3b82f6', '#8b5cf6', '#ec4899', '#6b7280', '#9ca3af', '#ffffff'].map((c) => (
-                                    <button
-                                      key={c}
-                                      onClick={() => {
-                                        updateAnnotation(annot.id, { color: c })
-                                        setAnnotColorDropdownId(null)
-                                      }}
-                                      className="w-5 h-5 rounded-full border border-slate-300 transition-transform hover:scale-110"
-                                      style={{ backgroundColor: c }}
-                                      title={c}
-                                    />
-                                  ))}
-                                </div>
-                                <div className="flex items-center gap-1 border-t border-slate-100 dark:border-slate-800 pt-1.5">
-                                  <span className="text-[10px] text-slate-400 font-bold">#</span>
-                                  <input
-                                    type="text"
-                                    value={(annot.color || '#000000').replace('#', '')}
-                                    onChange={(e) => {
-                                      const hex = e.target.value.substring(0, 6)
-                                      updateAnnotation(annot.id, { color: `#${hex}` })
-                                    }}
-                                    placeholder="000000"
-                                    className="w-18 text-[11px] px-1 py-0.5 border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900 rounded focus:outline-none focus:border-emerald-500 font-mono text-foreground"
-                                  />
-                                </div>
-                              </div>
-                            )}
-                          </div>
-
-                          <span className="w-px h-5 bg-slate-200 dark:bg-slate-800" />
-
-                          {/* Drag Indicator Button */}
-                          <button
-                            className="w-7 h-7 flex items-center justify-center rounded text-slate-400 cursor-move"
-                            title="Drag text to move"
-                          >
-                            ✥
-                          </button>
-
-                          <span className="w-px h-5 bg-slate-200 dark:bg-slate-800" />
-
-                          {/* Duplicate Button */}
-                          <button
-                            onClick={() => {
-                              const newId = crypto.randomUUID()
-                              addAnnotation({
-                                ...annot,
-                                id: newId,
-                                x: annot.x + 20,
-                                y: annot.y + 20
-                              })
-                              setSelectedAnnotId(newId)
-                            }}
-                            className="w-7 h-7 flex items-center justify-center rounded text-slate-500 hover:text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-950/30 transition-colors"
-                            title="Duplicate"
-                          >
-                            📋
-                          </button>
-
-                          {/* Delete Button */}
-                          <button
-                            onClick={() => {
-                              removeAnnotation(annot.id)
-                              setSelectedAnnotId(null)
-                            }}
-                            className="w-7 h-7 flex items-center justify-center rounded text-slate-500 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950/30 transition-colors"
-                            title="Delete text"
-                          >
-                            🗑️
-                          </button>
-                        </div>
+                >
+                  {/* Subtle Page Separator / Number Badge in Continuous Mode */}
+                  {scrollMode === 'continuous' && (
+                    <div className="mb-2 flex items-center gap-2 px-2.5 py-0.5 rounded-full bg-background/80 dark:bg-slate-900/80 backdrop-blur-md border border-border/50 text-[11px] font-medium text-muted-foreground shadow-xs select-none">
+                      <span>Page {pageNum}</span>
+                      {isCurrent && (
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
                       )}
                     </div>
-                  )
-                })
-              }
-            </div>
+                  )}
 
-            {/* Floating Selection Island for Non-Text Annotations */}
-            {selectedAnnot && selectedAnnot.pageNumber === currentPage && selectedAnnot.type !== 'text' && (
-              <div
-                className="absolute z-30 flex items-center gap-1.5 p-1 bg-background/95 dark:bg-slate-900/95 backdrop-blur-xl border border-border/80 shadow-2xl rounded-xl select-none animate-in fade-in zoom-in-95 pointer-events-auto"
-                style={{
-                  left: Math.max(10, selectedAnnot.x * zoom * 1.5),
-                  top: Math.max(10, selectedAnnot.y * zoom * 1.5 - 46),
-                }}
-                onMouseDown={(e) => e.stopPropagation()}
-              >
-                {/* Color selection for shapes / drawings */}
-                {['draw', 'rectangle', 'ellipse', 'line'].includes(selectedAnnot.type) && (
-                  <>
-                    <div className="flex items-center gap-1 px-1">
-                      {COLORS.slice(0, 5).map((c) => (
-                        <button
-                          key={c}
-                          className={`w-4 h-4 rounded-full border transition-all ${selectedAnnot.color === c ? 'scale-125 border-foreground shadow-xs' : 'border-transparent opacity-70 hover:opacity-100 hover:scale-110'}`}
-                          style={{ backgroundColor: c }}
-                          onClick={() => updateAnnotation(selectedAnnot.id, { color: c })}
-                        />
-                      ))}
-                    </div>
-                    <Separator orientation="vertical" className="h-4" />
-                    {/* Stroke width */}
-                    <div className="flex items-center gap-0.5">
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-6 w-6 rounded-md"
-                        onClick={() => {
-                          const nextW = Math.max(1, (selectedAnnot.strokeWidth || strokeWidth) - 1)
-                          setStrokeWidth(nextW)
-                          updateAnnotation(selectedAnnot.id, { strokeWidth: nextW })
-                        }}
-                      >
-                        <Minus className="w-3 h-3" />
-                      </Button>
-                      <span className="text-[11px] font-mono w-5 text-center">{selectedAnnot.strokeWidth || strokeWidth}</span>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-6 w-6 rounded-md"
-                        onClick={() => {
-                          const nextW = Math.min(20, (selectedAnnot.strokeWidth || strokeWidth) + 1)
-                          setStrokeWidth(nextW)
-                          updateAnnotation(selectedAnnot.id, { strokeWidth: nextW })
-                        }}
-                      >
-                        <Plus className="w-3 h-3" />
-                      </Button>
-                    </div>
-                    <Separator orientation="vertical" className="h-4" />
-                  </>
-                )}
-
-                {/* Size scaler for signature / image / whiteout / shapes */}
-                {['signature', 'image', 'whiteout', 'rectangle', 'ellipse'].includes(selectedAnnot.type) && (
-                  <>
-                    <span className="text-[10px] text-muted-foreground uppercase font-bold px-1">Size</span>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-6 w-6 rounded-md"
-                      onClick={() => {
-                        const w = selectedAnnot.width || 100
-                        const h = selectedAnnot.height || 50
-                        const ratio = h > 0 ? w / h : 1
-                        const newW = Math.max(20, w - 15)
-                        const newH = selectedAnnot.type === 'signature' || selectedAnnot.type === 'image' ? newW / ratio : Math.max(10, h - 10)
-                        saveToUndoStack()
-                        updateAnnotation(selectedAnnot.id, { width: newW, height: newH })
+                  <div className="pdf-canvas-container shadow-2xl rounded-lg overflow-hidden relative border border-border/30 bg-white">
+                    {/* Text input overlay for add-text tool */}
+                    {textInput.visible && isCurrent && (
+                      <div className="absolute z-20" style={{
+                        left: textInput.x * zoom * 1.5,
+                        top: textInput.y * zoom * 1.5 - (selectedAnnot?.type === 'text' ? (selectedAnnot.fontSize || 16) : fontSize) * zoom * 1.5
+                      }}>
+                        <input type="text" autoFocus value={textInputValue} onChange={(e) => setTextInputValue(e.target.value)}
+                          onKeyDown={(e) => { if (e.key === 'Enter') textSubmitRef.current(); if (e.key === 'Escape') setTextInput({ x: 0, y: 0, visible: false }) }}
+                          onBlur={() => textSubmitRef.current()}
+                          className="border-2 border-emerald-500 rounded px-2 py-1 bg-white/90 dark:bg-gray-900/90 backdrop-blur-sm outline-none shadow-lg text-foreground"
+                          style={{
+                            fontSize: (selectedAnnot?.type === 'text' ? (selectedAnnot.fontSize || 16) : fontSize) * zoom * 1.5,
+                            color: selectedAnnot ? selectedAnnot.color : drawColor,
+                            fontFamily: (selectedAnnot?.type === 'text' ? (selectedAnnot.fontFamily || 'Helvetica') : fontFamily) === 'Courier' ? 'Courier New, monospace' : (selectedAnnot?.type === 'text' ? (selectedAnnot.fontFamily || 'Helvetica') : fontFamily) === 'TimesRoman' ? 'Times New Roman, serif' : 'Helvetica Neue, sans-serif',
+                            fontWeight: (selectedAnnot?.type === 'text' ? !!selectedAnnot.bold : textBold) ? 'bold' : 'normal',
+                            fontStyle: (selectedAnnot?.type === 'text' ? !!selectedAnnot.italic : textItalic) ? 'italic' : 'normal'
+                          }}
+                          placeholder="Type annotation..." />
+                      </div>
+                    )}
+                    {isRendering && (!canvasRefs.current[pageNum] || !canvasRefs.current[pageNum]?.width) && (
+                      <div className="absolute inset-0 z-10 flex items-center justify-center bg-background/50 backdrop-blur-sm rounded-lg min-h-[300px]">
+                        <div className="w-8 h-8 border-3 border-emerald-200 border-t-emerald-600 rounded-full animate-spin" />
+                      </div>
+                    )}
+                    <canvas ref={(el) => { canvasRefs.current[pageNum] = el }} />
+                    <canvas
+                      ref={(el) => { overlayCanvasRefs.current[pageNum] = el }}
+                      className="absolute top-0 left-0"
+                      style={{
+                        pointerEvents: currentTool === 'editText' ? 'none' : 'auto',
+                        cursor: isPanMode
+                          ? (isPanning ? 'grabbing' : 'grab')
+                          : isCropping
+                          ? 'crosshair'
+                          : currentTool === 'text'
+                          ? 'text'
+                          : ['draw', 'rectangle', 'ellipse', 'line', 'whiteout', 'redact', 'highlight'].includes(currentTool)
+                          ? 'crosshair'
+                          : currentTool === 'eraser'
+                          ? 'cell'
+                          : currentTool === 'signature' || currentTool === 'image'
+                          ? 'copy'
+                          : 'default',
                       }}
+                      onMouseDown={(e) => { if (isPanMode) handlePanStart(e); else handlePointerDown(e, pageNum) }}
+                      onMouseMove={(e) => { if (isPanning) handlePanMove(e); else handlePointerMove(e, pageNum) }}
+                      onMouseUp={(e) => { if (isPanning) handlePanEnd(); else handlePointerUp(e, pageNum) }}
+                      onMouseLeave={() => { if (isPanning) handlePanEnd(); else handlePointerUp({} as any, pageNum) }}
+                      onClick={(e) => handleCanvasClick(e, pageNum)}
+                      onDoubleClick={handleCanvasDoubleClick}
+                      onTouchStart={(e) => handlePointerDown(e, pageNum)}
+                      onTouchMove={(e) => handlePointerMove(e, pageNum)}
+                      onTouchEnd={(e) => handlePointerUp(e, pageNum)}
+                    />
+                    {/* Native text editing layer */}
+                    {isCurrent && (
+                      <TextLayer pdfDoc={pdfDocRef.current} canvasEl={canvasRefs.current[pageNum]} containerEl={containerRef.current} />
+                    )}
+                    {/* Added text annotations HTML overlay */}
+                    <div 
+                      className="absolute top-0 left-0 w-full h-full pointer-events-none"
+                      style={{ zIndex: 6 }}
                     >
-                      <Minus className="w-3 h-3" />
-                    </Button>
-                    <span className="text-[11px] font-mono text-muted-foreground px-1">{Math.round(selectedAnnot.width || 100)}px</span>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-6 w-6 rounded-md"
-                      onClick={() => {
-                        const w = selectedAnnot.width || 100
-                        const h = selectedAnnot.height || 50
-                        const ratio = h > 0 ? w / h : 1
-                        const newW = Math.min(800, w + 15)
-                        const newH = selectedAnnot.type === 'signature' || selectedAnnot.type === 'image' ? newW / ratio : Math.min(600, h + 10)
-                        saveToUndoStack()
-                        updateAnnotation(selectedAnnot.id, { width: newW, height: newH })
-                      }}
-                    >
-                      <Plus className="w-3 h-3" />
-                    </Button>
-                    <Separator orientation="vertical" className="h-4" />
-                  </>
-                )}
+                      {pageAnnots
+                        .filter((annot) => annot.type === 'text')
+                        .map((annot) => {
+                          const isEditing = editingAnnotId === annot.id
+                          const isSelected = selectedAnnotId === annot.id
+                          const isSelectOrTextTool = currentTool === 'select' || currentTool === 'text'
+                          
+                          // Coordinate scaling
+                          const scale = zoom * 1.5
+                          
+                          // Style mapping
+                          const getMetricFontKey = (family?: string) => {
+                            if (!family) return 'arimo'
+                            const key = family.toLowerCase()
+                            if (METRIC_FONTS[key]) return key
+                            return matchMetricFont(family)
+                          }
+                          
+                          const fontStyleKey = getMetricFontKey(annot.fontFamily)
+                          const cssFontFamily = METRIC_FONTS[fontStyleKey]?.cssName || 'Arimo'
+                          
+                          const style: React.CSSProperties = {
+                            position: 'absolute',
+                            left: annot.x * scale,
+                            top: annot.y * scale - (annot.fontSize || 16) * scale, // Subtract font size to align with canvas baseline drawing
+                            fontSize: (annot.fontSize || 16) * scale,
+                            fontFamily: cssFontFamily,
+                            fontWeight: annot.bold ? 'bold' : 'normal',
+                            fontStyle: annot.italic ? 'italic' : 'normal',
+                            color: annot.color,
+                            whiteSpace: 'pre',
+                            lineHeight: '1.2',
+                            minWidth: '30px',
+                            minHeight: '20px',
+                            pointerEvents: isSelectOrTextTool ? 'auto' : 'none',
+                            userSelect: isEditing ? 'text' : 'none',
+                          }
+                          
+                          if (isEditing) {
+                            return (
+                              <div
+                                key={`edit-${annot.id}`}
+                                contentEditable
+                                suppressContentEditableWarning
+                                onBlur={(e) => {
+                                  const newText = e.currentTarget.textContent || ''
+                                  if (newText.trim() === '' || newText === 'Type text...') {
+                                    removeAnnotation(annot.id)
+                                    showStatus('Text annotation removed')
+                                  } else {
+                                    updateAnnotation(annot.id, { content: newText })
+                                    showStatus('Text annotation updated')
+                                  }
+                                  setEditingAnnotId(null)
+                                }}
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter' && !e.shiftKey) {
+                                    e.preventDefault()
+                                    e.currentTarget.blur()
+                                  }
+                                  if (e.key === 'Escape') {
+                                    e.preventDefault()
+                                    e.currentTarget.textContent = annot.content || ''
+                                    e.currentTarget.blur()
+                                  }
+                                }}
+                                ref={(el) => {
+                                  if (el) {
+                                    if (document.activeElement !== el) {
+                                      el.textContent = annot.content === 'Type text...' ? '' : (annot.content || '')
+                                      el.focus()
+                                      const range = document.createRange()
+                                      range.selectNodeContents(el)
+                                      range.collapse(false)
+                                      const sel = window.getSelection()
+                                      sel?.removeAllRanges()
+                                      sel?.addRange(range)
+                                    }
+                                  }
+                                }}
+                                style={{
+                                  ...style,
+                                  background: 'rgba(255,255,255,0.92)',
+                                  outline: '2px solid #10b981',
+                                  outlineOffset: '1px',
+                                  padding: '0 2px',
+                                  borderRadius: '2px',
+                                  boxShadow: '0 1px 4px rgba(0,0,0,0.1)',
+                                  zIndex: 10,
+                                }}
+                              />
+                            )
+                          }
+                          
+                          return (
+                            <div
+                              key={`view-${annot.id}`}
+                              style={style}
+                              onMouseDown={(e) => handleStartDrag(e, annot)}
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                if (isSelectOrTextTool) {
+                                  setSelectedAnnotId(annot.id)
+                                }
+                              }}
+                              onDoubleClick={(e) => {
+                                e.stopPropagation()
+                                if (isSelectOrTextTool) {
+                                  setSelectedAnnotId(annot.id)
+                                  setEditingAnnotId(annot.id)
+                                }
+                              }}
+                              className="group"
+                            >
+                              <span
+                                style={{
+                                  outline: isSelected ? '1.5px dashed #10b981' : 'none',
+                                  outlineOffset: '2px',
+                                  display: 'inline-block',
+                                  padding: '0 2px',
+                                  borderRadius: '2px',
+                                  cursor: isSelectOrTextTool ? 'move' : 'default',
+                                }}
+                                className="group-hover:outline group-hover:outline-1 group-hover:outline-emerald-300 group-hover:outline-dashed"
+                              >
+                                {annot.content || ' '}
+                              </span>
 
-                {/* Action button for Redact */}
-                {selectedAnnot.type === 'redact' && (
-                  <>
-                    <Button
-                      variant="destructive"
-                      size="sm"
-                      className="h-6 px-2 text-[11px] gap-1 rounded-md"
-                      disabled={processing === 'redact'}
-                      onClick={handleApplyRedaction}
-                    >
-                      {processing === 'redact' ? <Loader2 className="w-3 h-3 animate-spin" /> : <EyeOff className="w-3 h-3" />}
-                      <span>Apply Redact</span>
-                    </Button>
-                    <Separator orientation="vertical" className="h-4" />
-                  </>
-                )}
+                              {/* Floating Sejda-style Inline Toolbar */}
+                              {isSelected && (
+                                <div
+                                  onMouseDown={(e) => e.stopPropagation()}
+                                  className="absolute flex items-center gap-1.5 p-1 bg-white dark:bg-gray-900 border border-slate-200 dark:border-slate-800 shadow-xl rounded-lg z-50 select-none text-foreground font-sans pointer-events-auto"
+                                  style={{
+                                    left: 0,
+                                    top: -46,
+                                  }}
+                                >
+                                  {/* Bold Button */}
+                                  <button
+                                    onClick={() => updateAnnotation(annot.id, { bold: !annot.bold })}
+                                    className={`w-7 h-7 flex items-center justify-center rounded text-sm font-bold border border-transparent transition-colors hover:bg-slate-100 dark:hover:bg-slate-800 ${annot.bold ? 'bg-emerald-50 dark:bg-emerald-950/30 border-emerald-200 text-emerald-600' : 'text-slate-700 dark:text-slate-300'}`}
+                                    title="Bold"
+                                  >
+                                    B
+                                  </button>
+                                  
+                                  {/* Italic Button */}
+                                  <button
+                                    onClick={() => updateAnnotation(annot.id, { italic: !annot.italic })}
+                                    className={`w-7 h-7 flex items-center justify-center rounded text-sm italic border border-transparent transition-colors hover:bg-slate-100 dark:hover:bg-slate-800 ${annot.italic ? 'bg-emerald-50 dark:bg-emerald-950/30 border-emerald-200 text-emerald-600' : 'text-slate-700 dark:text-slate-300'}`}
+                                    title="Italic"
+                                  >
+                                    I
+                                  </button>
 
-                {/* Duplicate */}
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-6 w-6 rounded-md text-muted-foreground hover:text-foreground"
-                  title="Duplicate"
-                  onClick={() => {
-                    const newId = crypto.randomUUID()
-                    addAnnotation({
-                      ...selectedAnnot,
-                      id: newId,
-                      x: selectedAnnot.x + 15,
-                      y: selectedAnnot.y + 15,
-                    })
-                    setSelectedAnnotId(newId)
-                    showStatus('Annotation duplicated')
-                  }}
-                >
-                  <Copy className="w-3.5 h-3.5" />
-                </Button>
+                                  <span className="w-px h-5 bg-slate-200 dark:bg-slate-800" />
 
-                {/* Delete */}
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-6 w-6 rounded-md text-muted-foreground hover:text-destructive hover:bg-destructive/10"
-                  title="Delete"
-                  onClick={() => {
-                    removeAnnotation(selectedAnnot.id)
-                    setSelectedAnnotId(null)
-                    showStatus('Annotation deleted')
-                  }}
-                >
-                  <Trash2 className="w-3.5 h-3.5" />
-                </Button>
-              </div>
-            )}
+                                  {/* Font Size Selector */}
+                                  <div className="relative flex items-center">
+                                    <button
+                                      onClick={() => {
+                                        setAnnotSizeDropdownId(annotSizeDropdownId === annot.id ? null : annot.id)
+                                        setAnnotFontDropdownId(null)
+                                        setAnnotColorDropdownId(null)
+                                      }}
+                                      className="h-7 px-2 flex items-center gap-1 rounded text-xs border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 font-medium"
+                                      title="Font Size"
+                                    >
+                                      <span>{Math.round(annot.fontSize || 16)}</span>
+                                      <span className="text-[10px] text-slate-400">▼</span>
+                                    </button>
+                                    
+                                    {annotSizeDropdownId === annot.id && (
+                                      <div className="absolute top-8 left-0 flex flex-col max-h-48 overflow-y-auto bg-white dark:bg-gray-900 border border-slate-200 dark:border-slate-800 shadow-lg rounded-md z-50 p-1 min-w-[70px]">
+                                        <input
+                                          type="number"
+                                          value={Math.round(annot.fontSize || 16)}
+                                          onChange={(e) => {
+                                            const val = parseInt(e.target.value) || 16
+                                            updateAnnotation(annot.id, { fontSize: val })
+                                          }}
+                                          className="w-full text-xs px-1.5 py-1 border border-slate-200 dark:border-slate-800 rounded bg-white dark:bg-gray-900 focus:outline-none focus:border-emerald-500 mb-1"
+                                          min="4"
+                                          max="120"
+                                        />
+                                        {[8, 9, 10, 11, 12, 14, 16, 18, 24, 30, 36, 48, 60, 72].map((sz) => (
+                                          <button
+                                            key={sz}
+                                            onClick={() => {
+                                              updateAnnotation(annot.id, { fontSize: sz })
+                                              setAnnotSizeDropdownId(null)
+                                            }}
+                                            className={`text-left text-xs px-2 py-1.5 rounded hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors ${Math.round(annot.fontSize || 16) === sz ? 'bg-emerald-50 dark:bg-emerald-950/30 text-emerald-600 font-semibold' : 'text-slate-700 dark:text-slate-300'}`}
+                                          >
+                                            {sz}
+                                          </button>
+                                        ))}
+                                      </div>
+                                    )}
+                                  </div>
+
+                                  {/* Font Family Selector */}
+                                  <div className="relative">
+                                    <button
+                                      onClick={() => {
+                                        setAnnotFontDropdownId(annotFontDropdownId === annot.id ? null : annot.id)
+                                        setAnnotSizeDropdownId(null)
+                                        setAnnotColorDropdownId(null)
+                                      }}
+                                      className="h-7 px-2 flex items-center gap-1 rounded text-xs border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 font-medium max-w-[150px] truncate"
+                                      title="Font Family"
+                                    >
+                                      <span>{METRIC_FONTS[fontStyleKey]?.displayName.split(' ')[0] || 'Arial'}</span>
+                                      <span className="text-[10px] text-slate-400">▼</span>
+                                    </button>
+                                    
+                                    {annotFontDropdownId === annot.id && (
+                                      <div className="absolute top-8 left-0 flex flex-col bg-white dark:bg-gray-900 border border-slate-200 dark:border-slate-800 shadow-lg rounded-md z-50 p-1 min-w-[180px]">
+                                        {Object.entries(METRIC_FONTS).map(([key, f]) => (
+                                          <button
+                                            key={key}
+                                            onClick={() => {
+                                              updateAnnotation(annot.id, { fontFamily: key })
+                                              setAnnotFontDropdownId(null)
+                                            }}
+                                            className={`text-left text-xs px-2.5 py-2 rounded hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors ${fontStyleKey === key ? 'bg-emerald-50 dark:bg-emerald-950/30 text-emerald-600 font-semibold' : 'text-slate-700 dark:text-slate-300'}`}
+                                            style={{ fontFamily: f.cssName }}
+                                          >
+                                            {f.displayName}
+                                          </button>
+                                        ))}
+                                      </div>
+                                    )}
+                                  </div>
+
+                                  <span className="w-px h-5 bg-slate-200 dark:bg-slate-800" />
+
+                                  {/* Color Picker */}
+                                  <div className="relative">
+                                    <button
+                                      onClick={() => {
+                                        setAnnotColorDropdownId(annotColorDropdownId === annot.id ? null : annot.id)
+                                        setAnnotFontDropdownId(null)
+                                        setAnnotSizeDropdownId(null)
+                                      }}
+                                      className="w-7 h-7 flex items-center justify-center rounded border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900 hover:bg-slate-50 dark:hover:bg-slate-800"
+                                      title="Text Color"
+                                    >
+                                      <span
+                                        className="w-4 h-4 rounded-full border border-slate-300"
+                                        style={{ backgroundColor: annot.color }}
+                                      />
+                                    </button>
+                                    
+                                    {annotColorDropdownId === annot.id && (
+                                      <div className="absolute top-8 left-0 bg-white dark:bg-gray-900 border border-slate-200 dark:border-slate-800 shadow-lg rounded-md z-50 p-2 min-w-[150px] flex flex-col gap-2">
+                                        <div className="grid grid-cols-5 gap-1">
+                                          {['#000000', '#ef4444', '#f59e0b', '#10b981', '#3b82f6', '#8b5cf6', '#ec4899', '#6b7280', '#9ca3af', '#ffffff'].map((c) => (
+                                            <button
+                                              key={c}
+                                              onClick={() => {
+                                                updateAnnotation(annot.id, { color: c })
+                                                setAnnotColorDropdownId(null)
+                                              }}
+                                              className="w-5 h-5 rounded-full border border-slate-300 transition-transform hover:scale-110"
+                                              style={{ backgroundColor: c }}
+                                              title={c}
+                                            />
+                                          ))}
+                                        </div>
+                                        <div className="flex items-center gap-1 border-t border-slate-100 dark:border-slate-800 pt-1.5">
+                                          <span className="text-[10px] text-slate-400 font-bold">#</span>
+                                          <input
+                                            type="text"
+                                            value={(annot.color || '#000000').replace('#', '')}
+                                            onChange={(e) => {
+                                              const hex = e.target.value.substring(0, 6)
+                                              updateAnnotation(annot.id, { color: `#${hex}` })
+                                            }}
+                                            placeholder="000000"
+                                            className="w-18 text-[11px] px-1 py-0.5 border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900 rounded focus:outline-none focus:border-emerald-500 font-mono text-foreground"
+                                          />
+                                        </div>
+                                      </div>
+                                    )}
+                                  </div>
+
+                                  <span className="w-px h-5 bg-slate-200 dark:bg-slate-800" />
+
+                                  {/* Drag Indicator Button */}
+                                  <button
+                                    className="w-7 h-7 flex items-center justify-center rounded text-slate-400 cursor-move"
+                                    title="Drag text to move"
+                                  >
+                                    ✥
+                                  </button>
+
+                                  <span className="w-px h-5 bg-slate-200 dark:bg-slate-800" />
+
+                                  {/* Duplicate Button */}
+                                  <button
+                                    onClick={() => {
+                                      const newId = crypto.randomUUID()
+                                      addAnnotation({
+                                        ...annot,
+                                        id: newId,
+                                        x: annot.x + 20,
+                                        y: annot.y + 20
+                                      })
+                                      setSelectedAnnotId(newId)
+                                    }}
+                                    className="w-7 h-7 flex items-center justify-center rounded text-slate-500 hover:text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-950/30 transition-colors"
+                                    title="Duplicate"
+                                  >
+                                    📋
+                                  </button>
+
+                                  {/* Delete Button */}
+                                  <button
+                                    onClick={() => {
+                                      removeAnnotation(annot.id)
+                                      setSelectedAnnotId(null)
+                                    }}
+                                    className="w-7 h-7 flex items-center justify-center rounded text-slate-500 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950/30 transition-colors"
+                                    title="Delete text"
+                                  >
+                                    🗑️
+                                  </button>
+                                </div>
+                              )}
+                            </div>
+                          )
+                        })
+                      }
+                    </div>
+
+                    {/* Floating Selection Island for Non-Text Annotations */}
+                    {selectedAnnot && selectedAnnot.pageNumber === pageNum && selectedAnnot.type !== 'text' && (
+                      <div
+                        className="absolute z-30 flex items-center gap-1.5 p-1 bg-background/95 dark:bg-slate-900/95 backdrop-blur-xl border border-border/80 shadow-2xl rounded-xl select-none animate-in fade-in zoom-in-95 pointer-events-auto"
+                        style={{
+                          left: Math.max(10, selectedAnnot.x * zoom * 1.5),
+                          top: Math.max(10, selectedAnnot.y * zoom * 1.5 - 46),
+                        }}
+                        onMouseDown={(e) => e.stopPropagation()}
+                      >
+                        {/* Color selection for shapes / drawings */}
+                        {['draw', 'rectangle', 'ellipse', 'line'].includes(selectedAnnot.type) && (
+                          <>
+                            <div className="flex items-center gap-1 px-1">
+                              {COLORS.slice(0, 5).map((c) => (
+                                <button
+                                  key={c}
+                                  className={`w-4 h-4 rounded-full border transition-all ${selectedAnnot.color === c ? 'scale-125 border-foreground shadow-xs' : 'border-transparent opacity-70 hover:opacity-100 hover:scale-110'}`}
+                                  style={{ backgroundColor: c }}
+                                  onClick={() => updateAnnotation(selectedAnnot.id, { color: c })}
+                                />
+                              ))}
+                            </div>
+                            <Separator orientation="vertical" className="h-4" />
+                            {/* Stroke width */}
+                            <div className="flex items-center gap-0.5">
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-6 w-6 rounded-md"
+                                onClick={() => {
+                                  const nextW = Math.max(1, (selectedAnnot.strokeWidth || strokeWidth) - 1)
+                                  setStrokeWidth(nextW)
+                                  updateAnnotation(selectedAnnot.id, { strokeWidth: nextW })
+                                }}
+                              >
+                                <Minus className="w-3 h-3" />
+                              </Button>
+                              <span className="text-[11px] font-mono w-5 text-center">{selectedAnnot.strokeWidth || strokeWidth}</span>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-6 w-6 rounded-md"
+                                onClick={() => {
+                                  const nextW = Math.min(20, (selectedAnnot.strokeWidth || strokeWidth) + 1)
+                                  setStrokeWidth(nextW)
+                                  updateAnnotation(selectedAnnot.id, { strokeWidth: nextW })
+                                }}
+                              >
+                                <Plus className="w-3 h-3" />
+                              </Button>
+                            </div>
+                            <Separator orientation="vertical" className="h-4" />
+                          </>
+                        )}
+
+                        {/* Size scaler for signature / image / whiteout / shapes */}
+                        {['signature', 'image', 'whiteout', 'rectangle', 'ellipse'].includes(selectedAnnot.type) && (
+                          <>
+                            <span className="text-[10px] text-muted-foreground uppercase font-bold px-1">Size</span>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-6 w-6 rounded-md"
+                              onClick={() => {
+                                const w = selectedAnnot.width || 100
+                                const h = selectedAnnot.height || 50
+                                const ratio = h > 0 ? w / h : 1
+                                const newW = Math.max(20, w - 15)
+                                const newH = selectedAnnot.type === 'signature' || selectedAnnot.type === 'image' ? newW / ratio : Math.max(10, h - 10)
+                                saveToUndoStack()
+                                updateAnnotation(selectedAnnot.id, { width: newW, height: newH })
+                              }}
+                            >
+                              <Minus className="w-3 h-3" />
+                            </Button>
+                            <span className="text-[11px] font-mono text-muted-foreground px-1">{Math.round(selectedAnnot.width || 100)}px</span>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-6 w-6 rounded-md"
+                              onClick={() => {
+                                const w = selectedAnnot.width || 100
+                                const h = selectedAnnot.height || 50
+                                const ratio = h > 0 ? w / h : 1
+                                const newW = Math.min(800, w + 15)
+                                const newH = selectedAnnot.type === 'signature' || selectedAnnot.type === 'image' ? newW / ratio : Math.min(600, h + 10)
+                                saveToUndoStack()
+                                updateAnnotation(selectedAnnot.id, { width: newW, height: newH })
+                              }}
+                            >
+                              <Plus className="w-3 h-3" />
+                            </Button>
+                            <Separator orientation="vertical" className="h-4" />
+                          </>
+                        )}
+
+                        {/* Action button for Redact */}
+                        {selectedAnnot.type === 'redact' && (
+                          <>
+                            <Button
+                              variant="destructive"
+                              size="sm"
+                              className="h-6 px-2 text-[11px] gap-1 rounded-md"
+                              disabled={processing === 'redact'}
+                              onClick={handleApplyRedaction}
+                            >
+                              {processing === 'redact' ? <Loader2 className="w-3 h-3 animate-spin" /> : <EyeOff className="w-3 h-3" />}
+                              <span>Apply Redact</span>
+                            </Button>
+                            <Separator orientation="vertical" className="h-4" />
+                          </>
+                        )}
+
+                        {/* Duplicate */}
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-6 w-6 rounded-md text-muted-foreground hover:text-foreground"
+                          title="Duplicate"
+                          onClick={() => {
+                            const newId = crypto.randomUUID()
+                            addAnnotation({
+                              ...selectedAnnot,
+                              id: newId,
+                              x: selectedAnnot.x + 15,
+                              y: selectedAnnot.y + 15,
+                            })
+                            setSelectedAnnotId(newId)
+                            showStatus('Annotation duplicated')
+                          }}
+                        >
+                          <Copy className="w-3.5 h-3.5" />
+                        </Button>
+
+                        {/* Delete */}
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-6 w-6 rounded-md text-muted-foreground hover:text-destructive hover:bg-destructive/10"
+                          title="Delete"
+                          onClick={() => {
+                            removeAnnotation(selectedAnnot.id)
+                            setSelectedAnnotId(null)
+                            showStatus('Annotation deleted')
+                          }}
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )
+            })}
           </div>
 
           {/* ===== FLOATING BOTTOM PAGE CAPSULE ===== */}
-          <div className="fixed md:absolute bottom-4 left-1/2 -translate-x-1/2 z-30 flex items-center gap-2 px-3 py-1.5 bg-background/90 dark:bg-slate-900/90 backdrop-blur-xl border border-border/70 shadow-2xl rounded-full text-xs select-none">
+          <div className="fixed md:absolute bottom-4 left-1/2 -translate-x-1/2 z-30 flex items-center gap-1.5 sm:gap-2 px-3 py-1.5 bg-background/90 dark:bg-slate-900/90 backdrop-blur-xl border border-border/70 shadow-2xl rounded-full text-xs select-none max-w-[95vw] overflow-x-auto">
+            {/* View Mode Toggle: Continuous vs Single */}
+            <div className="flex items-center bg-muted/70 p-0.5 rounded-full shrink-0">
+              <Button
+                variant="ghost"
+                size="sm"
+                className={`h-6 px-2 text-[11px] rounded-full gap-1 transition-all ${
+                  scrollMode === 'continuous'
+                    ? 'bg-background text-foreground shadow-xs font-semibold'
+                    : 'text-muted-foreground hover:text-foreground'
+                }`}
+                onClick={() => setScrollMode('continuous')}
+                title="Continuous multi-page scroll"
+              >
+                <ScrollText className="w-3 h-3" />
+                <span className="hidden sm:inline">Continuous</span>
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                className={`h-6 px-2 text-[11px] rounded-full gap-1 transition-all ${
+                  scrollMode === 'single'
+                    ? 'bg-background text-foreground shadow-xs font-semibold'
+                    : 'text-muted-foreground hover:text-foreground'
+                }`}
+                onClick={() => {
+                  setScrollMode('single')
+                  if (containerRef.current) containerRef.current.scrollTop = 0
+                }}
+                title="Single page view"
+              >
+                <BookOpen className="w-3 h-3" />
+                <span className="hidden sm:inline">Single</span>
+              </Button>
+            </div>
+
+            <Separator orientation="vertical" className="h-4 shrink-0" />
+
             <Button
               variant="ghost"
               size="icon"
-              className="h-6 w-6 rounded-full"
+              className="h-6 w-6 rounded-full shrink-0"
               disabled={currentPage <= 1}
-              onClick={() => setCurrentPage(currentPage - 1)}
+              onClick={() => handlePageSelect(currentPage - 1)}
+              title="Previous Page"
             >
               <ChevronLeft className="w-3.5 h-3.5" />
             </Button>
-            <span className="text-xs font-medium px-1">
+            <span className="text-xs font-medium px-1 whitespace-nowrap shrink-0">
               Page <span className="font-semibold text-foreground">{currentPage}</span> of {totalPages}
             </span>
             <Button
               variant="ghost"
               size="icon"
-              className="h-6 w-6 rounded-full"
+              className="h-6 w-6 rounded-full shrink-0"
               disabled={currentPage >= totalPages}
-              onClick={() => setCurrentPage(currentPage + 1)}
+              onClick={() => handlePageSelect(currentPage + 1)}
+              title="Next Page"
             >
               <ChevronRight className="w-3.5 h-3.5" />
             </Button>
-            <Separator orientation="vertical" className="h-4" />
+            <Separator orientation="vertical" className="h-4 shrink-0" />
             <Button
               variant="ghost"
               size="icon"
-              className="h-6 w-6 rounded-full"
+              className="h-6 w-6 rounded-full shrink-0"
               onClick={() => setZoom(Math.max(0.2, zoom - 0.1))}
               title="Zoom Out"
             >
               <Minus className="w-3 h-3" />
             </Button>
-            <span className="font-mono text-[11px] text-muted-foreground w-8 text-center">{Math.round(zoom * 100)}%</span>
+            <span className="font-mono text-[11px] text-muted-foreground w-8 text-center shrink-0">{Math.round(zoom * 100)}%</span>
             <Button
               variant="ghost"
               size="icon"
-              className="h-6 w-6 rounded-full"
+              className="h-6 w-6 rounded-full shrink-0"
               onClick={() => setZoom(Math.min(3, zoom + 0.1))}
               title="Zoom In"
             >
@@ -2720,7 +2860,7 @@ export function PdfEditor() {
             <Button
               variant="ghost"
               size="sm"
-              className="h-6 px-2 text-[11px] rounded-full text-muted-foreground hover:text-foreground font-medium"
+              className="h-6 px-2 text-[11px] rounded-full text-muted-foreground hover:text-foreground font-medium shrink-0"
               onClick={handleFitToWidth}
             >
               Fit
