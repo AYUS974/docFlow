@@ -1,40 +1,38 @@
 'use client'
+
 import { useEffect, useRef, useCallback, useState, Fragment } from 'react'
-import { useAppStore, type PDFTextItem, groupTextItemsIntoLines, groupLinesIntoParagraphs, matchMetricFont, METRIC_FONTS } from '@/store/app-store'
+import {
+  useAppStore,
+  type PDFTextItem,
+  groupTextItemsIntoLines,
+  groupLinesIntoParagraphs,
+  matchMetricFont,
+  METRIC_FONTS,
+} from '@/store/app-store'
 import * as pdfjsLib from 'pdfjs-dist'
+import { Copy, Highlighter, Sparkles, Check } from 'lucide-react'
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdf-worker/pdf.worker.min.mjs'
 
-const CSS_FONT_MAP: Record<string, string> = {
-  'Helvetica': '"Helvetica Neue", Helvetica, Arial, sans-serif',
-  'TimesRoman': '"Times New Roman", Times, Georgia, serif',
-  'Courier': '"Courier New", Courier, "Lucida Console", monospace',
-}
-const FONT_LABELS: Record<string, string> = { Helvetica: 'Sans', TimesRoman: 'Serif', Courier: 'Mono' }
-
-// PDF.js returns a single visual line as many fragmented text items (font
-// changes, kerning and word-spacing each start a new run), which made a line
-// "break into chunks" when clicked. We stitch fragments that sit on the same
-// line with only a sub-space gap back into one editable run.
+// Stitch fragmented text runs on the same line into unified spans
 function mergeCloseItems(items: PDFTextItem[]): PDFTextItem[] {
   if (items.length <= 1) return items
-  
+
   const merged: PDFTextItem[] = []
   let current = { ...items[0] }
-  
+
   for (let i = 1; i < items.length; i++) {
     const next = items[i]
-    const sameLine = Math.abs(current.y - next.y) < (current.height * 0.4)
+    const sameLine = Math.abs(current.y - next.y) < current.height * 0.4
     const gap = next.x - (current.x + current.width)
-    const spaceWidth = current.fontSize * 0.25
-    
+    const spaceWidth = current.fontSize * 0.35
+
     if (sameLine && gap < spaceWidth && !current.text.endsWith(' ') && !next.text.startsWith(' ')) {
       current.text += next.text
       current.str = current.text
-      current.width = (next.x + next.width) - current.x
-      if (next.width > current.width) {
+      current.width = next.x + next.width - current.x
+      if (next.fontSize > current.fontSize) {
         current.fontSize = next.fontSize
-        current.fontFamily = next.fontFamily
       }
       current.widthInChars = current.fontSize > 0 ? Math.round(current.width / (current.fontSize * 0.52)) : current.text.length
     } else {
@@ -46,36 +44,303 @@ function mergeCloseItems(items: PDFTextItem[]): PDFTextItem[] {
   return merged
 }
 
+// Individual text span with automatic horizontal scaling to match canvas glyphs 1:1
+function TextSpanItem({
+  item,
+  scale,
+  isEditMode,
+  isHovered,
+  isSelected,
+  onSelect,
+  onDoubleClick,
+  onMouseEnter,
+  onMouseLeave,
+}: {
+  item: PDFTextItem
+  scale: number
+  isEditMode: boolean
+  isHovered: boolean
+  isSelected: boolean
+  onSelect: () => void
+  onDoubleClick: () => void
+  onMouseEnter: () => void
+  onMouseLeave: () => void
+}) {
+  const spanRef = useRef<HTMLSpanElement>(null)
+
+  useEffect(() => {
+    const el = spanRef.current
+    if (!el) return
+    el.style.transform = 'none'
+    const naturalWidth = el.getBoundingClientRect().width || el.offsetWidth
+    const targetWidth = item.width * scale
+
+    if (naturalWidth > 0 && targetWidth > 0) {
+      const scaleX = targetWidth / naturalWidth
+      el.style.transform = `scaleX(${scaleX})`
+      el.style.transformOrigin = '0 0'
+    }
+  }, [item.text, item.width, scale])
+
+  const itemFamilyKey = matchMetricFont(item.fontFamily)
+  const fontName = METRIC_FONTS[itemFamilyKey]?.cssName || 'Arimo, sans-serif'
+  const isItemBold = item.fontFamily.toLowerCase().includes('bold')
+  const isItemItalic = item.fontFamily.toLowerCase().includes('italic') || item.fontFamily.toLowerCase().includes('oblique')
+
+  const fontStyle: React.CSSProperties = {
+    position: 'absolute',
+    left: item.x * scale,
+    top: item.y * scale,
+    fontSize: (item.fontSize || item.height || 12) * scale,
+    fontFamily: fontName,
+    fontWeight: isItemBold ? 'bold' : 'normal',
+    fontStyle: isItemItalic ? 'italic' : 'normal',
+    color: 'transparent',
+    whiteSpace: 'pre',
+    lineHeight: 1,
+    display: 'inline-block',
+    userSelect: isEditMode ? 'none' : 'text',
+    cursor: isEditMode ? 'text' : 'text',
+  }
+
+  return (
+    <span
+      ref={spanRef}
+      style={{
+        ...fontStyle,
+        border: isEditMode
+          ? isHovered
+            ? '1px dashed rgba(16,185,129,0.7)'
+            : '1px dashed rgba(16,185,129,0.25)'
+          : 'none',
+        background: isEditMode && isHovered ? 'rgba(16,185,129,0.08)' : 'transparent',
+        borderRadius: '2px',
+        transition: 'border-color 0.15s, background 0.15s',
+        outline: isEditMode && isSelected ? '1.5px dashed #10b981' : 'none',
+      }}
+      onClick={(e) => {
+        if (isEditMode) {
+          e.stopPropagation()
+          onSelect()
+        }
+      }}
+      onDoubleClick={(e) => {
+        if (isEditMode) {
+          e.stopPropagation()
+          onDoubleClick()
+        }
+      }}
+      onMouseEnter={onMouseEnter}
+      onMouseLeave={onMouseLeave}
+    >
+      {item.text}
+    </span>
+  )
+}
+
 interface TextLayerProps {
   pdfDoc: pdfjsLib.PDFDocumentProxy | null
   canvasEl: HTMLCanvasElement | null
   containerEl: HTMLDivElement | null
+  pageNumber: number
+  onHighlightSelection?: (text: string, bounds: { x: number; y: number; width: number; height: number }, pageNumber: number) => void
 }
 
-export function TextLayer({ pdfDoc, canvasEl, containerEl }: TextLayerProps) {
+export function TextLayer({
+  pdfDoc,
+  canvasEl,
+  containerEl,
+  pageNumber,
+  onHighlightSelection,
+}: TextLayerProps) {
   const {
-    currentPage, zoom, textItems, setTextItems,
-    textLines, setTextLines,
-    textParagraphs, setTextParagraphs,
-    editingTextItem, setEditingTextItem,
-    textEdits, addTextEdit, updateTextEdit, removeTextEdit, currentTool,
+    zoom,
+    editingTextItem,
+    setEditingTextItem,
+    textEdits,
+    addTextEdit,
+    updateTextEdit,
+    removeTextEdit,
+    currentTool,
     duplicateTextEdit,
+    addAnnotation,
+    drawColor,
+    toggleAiPanel,
+    showAiPanel,
+    setCopiedText,
   } = useAppStore()
 
+  const [pageTextItems, setPageTextItems] = useState<PDFTextItem[]>([])
+  const [pageTextLines, setPageTextLines] = useState<any[]>([])
   const [hoveredItemId, setHoveredItemId] = useState<string | null>(null)
   const [selectedEditId, setSelectedEditId] = useState<string | null>(null)
   const [showFontDropdown, setShowFontDropdown] = useState(false)
   const [showSizeDropdown, setShowSizeDropdown] = useState(false)
   const [showColorDropdown, setShowColorDropdown] = useState(false)
+  const [copied, setCopied] = useState(false)
+
+  // Floating selection tooltip state
+  const [selectionBox, setSelectionBox] = useState<{
+    text: string
+    x: number
+    y: number
+    width: number
+    height: number
+    pdfBounds: { x: number; y: number; width: number; height: number }
+  } | null>(null)
+
   const editRef = useRef<HTMLDivElement>(null)
   const layerRef = useRef<HTMLDivElement>(null)
-  // Drag state for repositioning a committed edit ("pick & place").
   const dragRef = useRef<{ id: string; startCX: number; startCY: number; startX: number; startY: number; moved: boolean } | null>(null)
 
-  // --- Inline toolbar handlers ---
-  const activeItem = editingTextItem || (selectedEditId ? (textEdits.get(selectedEditId)?.original || textItems.find(i => i.id === selectedEditId)) : null)
+  const scale = zoom * 1.5
+  const isEditMode = currentTool === 'editText'
+  const isSelectOrHighlight = currentTool === 'select' || currentTool === 'highlight' || currentTool === 'pan'
+
+  // Extract text content for this specific page
+  const extractText = useCallback(async () => {
+    if (!pdfDoc || pageNumber < 1 || pageNumber > pdfDoc.numPages) return
+    try {
+      const page = await pdfDoc.getPage(pageNumber)
+      const textContent = await page.getTextContent()
+      const styles: Record<string, any> = (textContent as any).styles || {}
+      const viewport = page.getViewport({ scale: 1 })
+
+      const rawItems: PDFTextItem[] = textContent.items
+        .filter((item: any) => 'str' in item && item.str.trim().length > 0)
+        .map((item: any, idx: number) => {
+          const tx = item.transform
+          const x = tx[4]
+          const y = viewport.height - tx[5] - (item.height || 12)
+          const itemFontSize = Math.abs(tx[0]) || Math.abs(tx[3]) || 12
+          const width = item.width || 0
+          const height = item.height || itemFontSize * 1.2
+          const fontName = styles[item.fontName]?.fontFamily || item.fontName || 'sans-serif'
+          const widthInChars = itemFontSize > 0 ? Math.round(width / (itemFontSize * 0.52)) : item.str.length
+
+          return {
+            id: `text-${pageNumber}-${idx}`,
+            text: item.str,
+            str: item.str,
+            x,
+            y,
+            width,
+            height,
+            fontSize: itemFontSize,
+            fontFamily: fontName,
+            pageNumber,
+            transform: tx,
+            hasEOL: item.hasEOL || false,
+            dir: item.dir || 'ltr',
+            widthInChars,
+            lineHeight: height * 1.2,
+          }
+        })
+
+      rawItems.sort((a, b) => (Math.abs(a.y - b.y) < a.height * 0.4 ? a.x - b.x : a.y - b.y))
+      const lines = groupTextItemsIntoLines(rawItems)
+      const paragraphs = groupLinesIntoParagraphs(lines)
+
+      const indexedItems = rawItems.map((item) => {
+        const line = lines.find((l) => l.items.some((li) => li.id === item.id))
+        const para = paragraphs.find((p) => p.lines.some((pl) => pl.items.some((li) => li.id === item.id)))
+        return {
+          ...item,
+          lineIndex: line ? lines.indexOf(line) : undefined,
+          paragraphIndex: para ? paragraphs.indexOf(para) : undefined,
+        }
+      })
+
+      setPageTextItems(mergeCloseItems(indexedItems))
+      setPageTextLines(lines)
+    } catch (err) {
+      console.error(`Text extraction failed for page ${pageNumber}:`, err)
+    }
+  }, [pdfDoc, pageNumber])
+
+  useEffect(() => {
+    extractText()
+  }, [extractText])
+
+  // Handle native text selection change
+  const handleMouseUp = () => {
+    if (isEditMode) return
+    const sel = window.getSelection()
+    if (!sel || sel.isCollapsed || !sel.toString().trim()) {
+      setSelectionBox(null)
+      return
+    }
+
+    const selectedText = sel.toString().trim()
+    const range = sel.getRangeAt(0)
+    const rect = range.getBoundingClientRect()
+    const layerRect = layerRef.current?.getBoundingClientRect()
+
+    if (layerRect && rect.width > 0 && rect.height > 0) {
+      const localX = (rect.left - layerRect.left) / scale
+      const localY = (rect.top - layerRect.top) / scale
+      const localW = rect.width / scale
+      const localH = rect.height / scale
+
+      setSelectionBox({
+        text: selectedText,
+        x: rect.left - layerRect.left,
+        y: rect.top - layerRect.top - 42,
+        width: rect.width,
+        height: rect.height,
+        pdfBounds: {
+          x: Math.max(0, localX),
+          y: Math.max(0, localY),
+          width: localW,
+          height: localH,
+        },
+      })
+    }
+  }
+
+  const handleCopySelection = () => {
+    if (!selectionBox) return
+    const textToCopy = selectionBox.text
+    try {
+      if (typeof navigator !== 'undefined' && navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(textToCopy).catch(() => {})
+      }
+    } catch {}
+    setCopiedText(textToCopy)
+    setCopied(true)
+    setTimeout(() => {
+      setCopied(false)
+      setSelectionBox(null)
+    }, 1200)
+  }
+
+  const handleHighlightSelection = (highlightColor?: string) => {
+    if (!selectionBox) return
+    const b = selectionBox.pdfBounds
+    addAnnotation({
+      id: crypto.randomUUID(),
+      type: 'highlight',
+      pageNumber,
+      x: b.x,
+      y: b.y,
+      width: b.width,
+      height: b.height,
+      color: highlightColor || drawColor || '#f59e0b',
+    })
+    setSelectionBox(null)
+    window.getSelection()?.removeAllRanges()
+  }
+
+  const handleAskAiAboutSelection = () => {
+    if (!selectionBox) return
+    if (!showAiPanel) toggleAiPanel()
+    setSelectionBox(null)
+  }
+
+  // --- Inline edit toolbar handlers ---
+  const activeItem = editingTextItem || (selectedEditId ? (textEdits.get(selectedEditId)?.original || pageTextItems.find((i) => i.id === selectedEditId)) : null)
   const activeEdit = activeItem ? textEdits.get(activeItem.id) : null
-  const showToolbar = !!activeItem && currentTool === 'editText'
+  const showToolbar = !!activeItem && isEditMode
 
   const editFamilyKey = activeEdit?.fontFamily || (activeItem ? matchMetricFont(activeItem.fontFamily) : 'arimo')
   const editSize = activeEdit?.fontSize || (activeItem ? activeItem.fontSize : 12)
@@ -138,83 +403,7 @@ export function TextLayer({ pdfDoc, canvasEl, containerEl }: TextLayerProps) {
   const activeX = activeEdit ? activeEdit.x : (activeItem ? activeItem.x : 0)
   const activeY = activeEdit ? activeEdit.y : (activeItem ? activeItem.y : 0)
 
-  // Extract text content when page changes
-  const extractText = useCallback(async () => {
-    if (!pdfDoc) return
-    // Skip stale page numbers during a document swap (avoids "Invalid page request").
-    if (currentPage < 1 || currentPage > pdfDoc.numPages) return
-    try {
-      const page = await pdfDoc.getPage(currentPage)
-      const textContent = await page.getTextContent()
-      // pdf.js exposes the real font family in `styles[fontName].fontFamily`
-      // (item.fontName is just an internal id like "g_d0_f2").
-      const styles: Record<string, any> = (textContent as any).styles || {}
-      const viewport = page.getViewport({ scale: 1 })
-
-      const rawItems: PDFTextItem[] = textContent.items
-        .filter((item: any) => 'str' in item && item.str.trim().length > 0)
-        .map((item: any, idx: number) => {
-          const tx = item.transform
-          const x = tx[4]
-          const y = viewport.height - tx[5] - (item.height || 12)
-          const itemFontSize = Math.abs(tx[0]) || Math.abs(tx[3]) || 12
-          const width = item.width || 0
-          const height = item.height || itemFontSize * 1.2
-          const fontName = styles[item.fontName]?.fontFamily || item.fontName || 'sans-serif'
-          // Compute approximate char width for reflow
-          const widthInChars = itemFontSize > 0 ? Math.round(width / (itemFontSize * 0.52)) : item.str.length
-
-          return {
-            id: `text-${currentPage}-${idx}`,
-            text: item.str,
-            str: item.str,
-            x, y, width, height,
-            fontSize: itemFontSize,
-            fontFamily: fontName,
-            pageNumber: currentPage,
-            transform: tx,
-            hasEOL: item.hasEOL || false,
-            dir: item.dir || 'ltr',
-            widthInChars,
-            lineHeight: height * 1.2,
-          }
-        })
-
-      // Sort by y then x for proper line grouping
-      rawItems.sort((a, b) => Math.abs(a.y - b.y) < (a.height * 0.4) ? a.x - b.x : a.y - b.y)
-
-      // Group into lines and paragraphs for reflow support
-      const lines = groupTextItemsIntoLines(rawItems)
-      const paragraphs = groupLinesIntoParagraphs(lines)
-
-      // Assign line/paragraph indices back to items
-      const indexedItems = rawItems.map(item => {
-        const line = lines.find(l => l.items.some(li => li.id === item.id))
-        const para = paragraphs.find(p => p.lines.some(pl => pl.items.some(li => li.id === item.id)))
-        return {
-          ...item,
-          lineIndex: line ? lines.indexOf(line) : undefined,
-          paragraphIndex: para ? paragraphs.indexOf(para) : undefined,
-        }
-      })
-
-      setTextItems(mergeCloseItems(indexedItems))
-      setTextLines(lines)
-      setTextParagraphs(paragraphs)
-    } catch (err) {
-      console.error('Text extraction failed:', err)
-    }
-  }, [pdfDoc, currentPage, setTextItems, setTextLines, setTextParagraphs])
-
-  useEffect(() => { extractText() }, [extractText])
-
-  // When user clicks a text item
-  const handleTextClick = (item: PDFTextItem) => {
-    if (currentTool !== 'editText') return
-    setEditingTextItem(item)
-  }
-
-  // When user finishes editing — read the edited text straight from the DOM.
+  // When user finishes editing
   const handleEditBlur = () => {
     const newText = (editRef.current?.textContent ?? '').replace(/ /g, ' ')
     if (editingTextItem) {
@@ -244,15 +433,12 @@ export function TextLayer({ pdfDoc, canvasEl, containerEl }: TextLayerProps) {
     }
   }
 
-  const scale = zoom * 1.5
-  const isEditMode = currentTool === 'editText'
-
   const getEditedText = (itemId: string) => {
     const edit = textEdits.get(itemId)
     return edit ? edit.edited : null
   }
 
-  // --- Pick & place: drag a committed edit to any position ---
+  // --- Pick & place drag handlers ---
   const startEditDrag = (e: React.MouseEvent, item: PDFTextItem) => {
     if (!isEditMode) return
     e.preventDefault()
@@ -270,7 +456,9 @@ export function TextLayer({ pdfDoc, canvasEl, containerEl }: TextLayerProps) {
     if (Math.abs(dx) > 0.5 || Math.abs(dy) > 0.5) d.moved = true
     updateTextEdit(d.id, { x: d.startX + dx, y: d.startY + dy })
   }
-  const endEditDrag = () => { dragRef.current = null }
+  const endEditDrag = () => {
+    dragRef.current = null
+  }
 
   if (!canvasEl || !pdfDoc) return null
 
@@ -279,52 +467,44 @@ export function TextLayer({ pdfDoc, canvasEl, containerEl }: TextLayerProps) {
       ref={layerRef}
       className="absolute top-0 left-0 w-full h-full"
       style={{
-        pointerEvents: isEditMode ? 'auto' : 'none',
-        zIndex: isEditMode ? 5 : 1,
+        pointerEvents: isEditMode ? 'auto' : isSelectOrHighlight ? 'auto' : 'none',
+        zIndex: isEditMode ? 10 : 5,
+        userSelect: isEditMode ? 'none' : 'text',
       }}
+      onMouseUp={handleMouseUp}
       onMouseMove={handleLayerMouseMove}
-      onMouseUp={endEditDrag}
-      onMouseLeave={endEditDrag}
-      onMouseDown={(e) => { if (e.target === e.currentTarget) setSelectedEditId(null) }}
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget && isEditMode) setSelectedEditId(null)
+      }}
     >
-      {textItems.map((item) => {
+      {/* Native PDF Text Spans with Auto-Fit Horizontal Sizing */}
+      {pageTextItems.map((item) => {
         const editedText = getEditedText(item.id)
         const isEditing = editingTextItem?.id === item.id
-        
-        const edit = textEdits.get(item.id)
-        const editFamilyKey = edit?.fontFamily ?? matchMetricFont(item.fontFamily)
-        const fontName = METRIC_FONTS[editFamilyKey]?.cssName || 'Arimo'
-        const itemFontSize = edit?.fontSize ?? item.fontSize
-        const isBold = edit ? edit.bold : (item.fontFamily.toLowerCase().includes('bold'))
-        const isItalic = edit ? edit.italic : (item.fontFamily.toLowerCase().includes('italic') || item.fontFamily.toLowerCase().includes('oblique'))
-        const itemColor = edit?.color ?? '#000000'
 
-        const fontStyle: React.CSSProperties = {
-          position: 'absolute',
-          left: (edit?.x ?? item.x) * scale,
-          top: (edit?.y ?? item.y) * scale,
-          fontSize: itemFontSize * scale,
-          fontFamily: fontName,
-          fontWeight: isBold ? 'bold' : 'normal',
-          fontStyle: isItalic ? 'italic' : 'normal',
-          color: 'transparent',
-          cursor: isEditMode ? 'text' : 'default',
-          whiteSpace: 'pre',
-          lineHeight: `${item.height / item.fontSize}`,
-          minWidth: '1px',
-          minHeight: '1px',
-        }
+        const edit = textEdits.get(item.id)
+        const itemFamilyKey = edit?.fontFamily ?? matchMetricFont(item.fontFamily)
+        const fontName = METRIC_FONTS[itemFamilyKey]?.cssName || 'Arimo'
+        const itemFontSize = edit?.fontSize ?? item.fontSize
+        const isItemBold = edit ? edit.bold : item.fontFamily.toLowerCase().includes('bold')
+        const isItemItalic = edit ? edit.italic : item.fontFamily.toLowerCase().includes('italic') || item.fontFamily.toLowerCase().includes('oblique')
+        const itemColor = edit?.color ?? '#000000'
 
         if (isEditing) {
           return (
             <Fragment key={item.id}>
-              {/* Stationary white mask over the ORIGINAL glyphs while editing */}
-              <div style={{
-                position: 'absolute',
-                left: item.x * scale, top: (item.y - 1) * scale,
-                width: Math.max(item.width, 4) * scale, height: (item.height + 2) * scale,
-                background: 'white', zIndex: 1, pointerEvents: 'none',
-              }} />
+              <div
+                style={{
+                  position: 'absolute',
+                  left: item.x * scale,
+                  top: (item.y - 1) * scale,
+                  width: Math.max(item.width, 4) * scale,
+                  height: (item.height + 2) * scale,
+                  background: 'white',
+                  zIndex: 1,
+                  pointerEvents: 'none',
+                }}
+              />
               <div
                 key={item.id}
                 ref={(el) => {
@@ -333,7 +513,6 @@ export function TextLayer({ pdfDoc, canvasEl, containerEl }: TextLayerProps) {
                     const existing = textEdits.get(item.id)
                     el.textContent = existing ? existing.edited : item.text
                     el.focus()
-                    // Place the caret at the end of the text.
                     const sel = window.getSelection()
                     const range = document.createRange()
                     range.selectNodeContents(el)
@@ -347,7 +526,13 @@ export function TextLayer({ pdfDoc, canvasEl, containerEl }: TextLayerProps) {
                 onBlur={handleEditBlur}
                 onKeyDown={handleEditKeyDown}
                 style={{
-                  ...fontStyle,
+                  position: 'absolute',
+                  left: item.x * scale,
+                  top: item.y * scale,
+                  fontSize: itemFontSize * scale,
+                  fontFamily: fontName,
+                  fontWeight: isItemBold ? 'bold' : 'normal',
+                  fontStyle: isItemItalic ? 'italic' : 'normal',
                   color: itemColor,
                   background: 'white',
                   outline: '2px solid #10b981',
@@ -357,7 +542,10 @@ export function TextLayer({ pdfDoc, canvasEl, containerEl }: TextLayerProps) {
                   minWidth: '30px',
                   caretColor: itemColor,
                   boxShadow: '0 1px 4px rgba(0,0,0,0.1)',
-                  zIndex: 10,
+                  zIndex: 20,
+                  userSelect: 'text',
+                  whiteSpace: 'pre',
+                  lineHeight: 1,
                 }}
               />
             </Fragment>
@@ -365,24 +553,29 @@ export function TextLayer({ pdfDoc, canvasEl, containerEl }: TextLayerProps) {
         }
 
         if (editedText !== null) {
-          const edit = textEdits.get(item.id)!
-          const ex = edit.x
-          const ey = edit.y
+          const editEntry = textEdits.get(item.id)!
           const isSelected = selectedEditId === item.id
-          
+
           return (
             <Fragment key={item.id}>
-              {/* Stationary white mask over the ORIGINAL glyphs */}
-              <div style={{
-                position: 'absolute',
-                left: item.x * scale, top: (item.y - 1) * scale,
-                width: Math.max(item.width, 4) * scale, height: (item.height + 2) * scale,
-                background: 'white', zIndex: 1, pointerEvents: 'none',
-              }} />
-              {/* The edited text */}
+              <div
+                style={{
+                  position: 'absolute',
+                  left: item.x * scale,
+                  top: (item.y - 1) * scale,
+                  width: Math.max(item.width, 4) * scale,
+                  height: (item.height + 2) * scale,
+                  background: 'white',
+                  zIndex: 1,
+                  pointerEvents: 'none',
+                }}
+              />
               <span
                 onMouseDown={(e) => startEditDrag(e, item)}
-                onClick={(e) => { e.stopPropagation(); if (isEditMode) setSelectedEditId(item.id) }}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  if (isEditMode) setSelectedEditId(item.id)
+                }}
                 onDoubleClick={(e) => {
                   e.stopPropagation()
                   if (isEditMode) {
@@ -391,197 +584,140 @@ export function TextLayer({ pdfDoc, canvasEl, containerEl }: TextLayerProps) {
                 }}
                 style={{
                   position: 'absolute',
-                  left: ex * scale, top: ey * scale,
-                  fontSize: edit.fontSize * scale,
+                  left: editEntry.x * scale,
+                  top: editEntry.y * scale,
+                  fontSize: editEntry.fontSize * scale,
                   fontFamily: fontName,
-                  fontWeight: edit.bold ? 'bold' : 'normal',
-                  fontStyle: edit.italic ? 'italic' : 'normal',
-                  lineHeight: `${item.height / item.fontSize}`,
+                  fontWeight: editEntry.bold ? 'bold' : 'normal',
+                  fontStyle: editEntry.italic ? 'italic' : 'normal',
+                  lineHeight: 1,
                   whiteSpace: 'pre',
-                  color: edit.color, background: 'white',
-                  display: 'inline-block', zIndex: 2,
+                  color: editEntry.color,
+                  background: 'white',
+                  display: 'inline-block',
+                  zIndex: 2,
                   padding: '0 1px',
-                  cursor: isEditMode ? 'move' : 'default',
-                  outline: isSelected ? '1px dashed #10b981' : 'none',
-                  userSelect: 'none',
+                  cursor: isEditMode ? 'move' : 'text',
+                  outline: isSelected ? '1.5px dashed #10b981' : 'none',
+                  userSelect: isEditMode ? 'none' : 'text',
                 }}
-              >{editedText}</span>
+              >
+                {editedText}
+              </span>
             </Fragment>
           )
         }
 
-        // Non-editing: transparent but clickable hitbox
-        const isHovered = hoveredItemId === item.id
+        // Standard selectable PDF text run with precise auto-scaled width
         return (
-          <span
+          <TextSpanItem
             key={item.id}
-            onClick={(e) => {
-              e.stopPropagation()
-              if (isEditMode) {
-                setSelectedEditId(item.id)
-              }
+            item={item}
+            scale={scale}
+            isEditMode={isEditMode}
+            isHovered={hoveredItemId === item.id}
+            isSelected={selectedEditId === item.id}
+            onSelect={() => setSelectedEditId(item.id)}
+            onDoubleClick={() => {
+              setSelectedEditId(item.id)
+              setEditingTextItem(item)
             }}
-            onDoubleClick={(e) => {
-              e.stopPropagation()
-              if (isEditMode) {
-                setSelectedEditId(item.id)
-                setEditingTextItem(item)
-              }
-            }}
-            style={{
-              ...fontStyle,
-              display: 'inline-block',
-              border: isEditMode 
-                ? (isHovered ? '1px dashed rgba(16,185,129,0.6)' : '1px dashed rgba(16,185,129,0.25)') 
-                : 'none',
-              background: isEditMode && isHovered ? 'rgba(16,185,129,0.08)' : 'transparent',
-              borderRadius: '2px',
-              transition: 'border-color 0.15s, background 0.15s',
-              outline: isEditMode && selectedEditId === item.id ? '1px dashed #10b981' : 'none',
-            }}
-            onMouseEnter={() => {
-              if (isEditMode) {
-                setHoveredItemId(item.id)
-              }
-            }}
-            onMouseLeave={() => {
-              if (isEditMode) {
-                setHoveredItemId(null)
-              }
-            }}
-          >
-            {item.text}
-          </span>
+            onMouseEnter={() => setHoveredItemId(item.id)}
+            onMouseLeave={() => setHoveredItemId(null)}
+          />
         )
       })}
 
-      {/* Render duplicate text edits */}
-      {Array.from(textEdits.entries()).map(([id, edit]) => {
-        if (!edit.isDuplicate) return null
-        const isEditing = editingTextItem?.id === id
-        const fontName = METRIC_FONTS[edit.fontFamily]?.cssName || 'Arimo'
-        const isSelected = selectedEditId === id
-
-        const fontStyle: React.CSSProperties = {
-          position: 'absolute',
-          left: edit.x * scale,
-          top: edit.y * scale,
-          fontSize: edit.fontSize * scale,
-          fontFamily: fontName,
-          fontWeight: edit.bold ? 'bold' : 'normal',
-          fontStyle: edit.italic ? 'italic' : 'normal',
-          color: edit.color,
-          whiteSpace: 'pre',
-          lineHeight: '1.2',
-          minWidth: '1px',
-          minHeight: '1px',
-        }
-
-        if (isEditing) {
-          return (
-            <div
-              key={id}
-              ref={(el) => {
-                editRef.current = el
-                if (el && document.activeElement !== el) {
-                  el.textContent = edit.edited
-                  el.focus()
-                  const sel = window.getSelection()
-                  const range = document.createRange()
-                  range.selectNodeContents(el)
-                  range.collapse(false)
-                  sel?.removeAllRanges()
-                  sel?.addRange(range)
-                }
-              }}
-              contentEditable
-              suppressContentEditableWarning
-              onBlur={handleEditBlur}
-              onKeyDown={handleEditKeyDown}
-              style={{
-                ...fontStyle,
-                background: 'white',
-                outline: '2px solid #10b981',
-                outlineOffset: '1px',
-                padding: '0 2px',
-                borderRadius: '2px',
-                minWidth: '30px',
-                caretColor: edit.color,
-                boxShadow: '0 1px 4px rgba(0,0,0,0.1)',
-                zIndex: 10,
-              }}
-            />
-          )
-        }
-
-        return (
-          <span
-            key={id}
-            onMouseDown={(e) => {
-              if (!isEditMode) return
-              e.preventDefault()
-              e.stopPropagation()
-              setSelectedEditId(id)
-              dragRef.current = { id, startCX: e.clientX, startCY: e.clientY, startX: edit.x, startY: edit.y, moved: false }
-            }}
-            onClick={(e) => {
-              e.stopPropagation();
-              if (isEditMode) {
-                setSelectedEditId(id)
-              }
-            }}
-            onDoubleClick={(e) => {
-              e.stopPropagation()
-              if (isEditMode) {
-                setSelectedEditId(id)
-                setEditingTextItem(edit.original)
-              }
-            }}
-            style={{
-              ...fontStyle,
-              background: 'white',
-              display: 'inline-block',
-              zIndex: 2,
-              padding: '0 1px',
-              cursor: isEditMode ? 'move' : 'default',
-              outline: isSelected ? '1px dashed #10b981' : 'none',
-              userSelect: 'none',
-            }}
+      {/* Floating Text Selection Quick Actions Bar */}
+      {selectionBox && !isEditMode && (
+        <div
+          className="absolute z-40 flex items-center gap-1.5 p-1.5 bg-background/95 dark:bg-slate-900/95 backdrop-blur-xl border border-border/80 shadow-2xl rounded-2xl text-xs select-none animate-in fade-in zoom-in-95 pointer-events-auto"
+          style={{
+            left: Math.max(10, selectionBox.x),
+            top: Math.max(10, selectionBox.y),
+          }}
+          onMouseDown={(e) => e.stopPropagation()}
+        >
+          <button
+            onClick={handleCopySelection}
+            className="flex items-center gap-1 px-2.5 py-1 rounded-xl hover:bg-muted font-medium transition-colors text-foreground"
+            title="Copy Text (Ctrl+C)"
           >
-            {edit.edited}
-          </span>
-        )
-      })}
+            {copied ? <Check className="w-3.5 h-3.5 text-emerald-500" /> : <Copy className="w-3.5 h-3.5 text-blue-500" />}
+            <span>{copied ? 'Copied!' : 'Copy'}</span>
+          </button>
 
-      {/* Floating Sejda-style Inline Toolbar */}
+          <span className="w-px h-4 bg-border/60" />
+
+          {/* Quick Highlight Colors (Yellow, Green, Blue, Pink, Purple, Red) */}
+          <div className="flex items-center gap-1 px-1">
+            <span className="text-[10px] text-muted-foreground font-semibold flex items-center gap-0.5 mr-0.5">
+              <Highlighter className="w-3.5 h-3.5 text-amber-500" />
+            </span>
+            {[
+              { label: 'Yellow', color: '#f59e0b' },
+              { label: 'Green', color: '#10b981' },
+              { label: 'Blue', color: '#3b82f6' },
+              { label: 'Pink', color: '#ec4899' },
+              { label: 'Purple', color: '#8b5cf6' },
+              { label: 'Red', color: '#ef4444' },
+            ].map((c) => (
+              <button
+                key={c.color}
+                onClick={() => handleHighlightSelection(c.color)}
+                className="w-4 h-4 rounded-full border border-border/40 transition-transform hover:scale-130 shadow-xs"
+                style={{ backgroundColor: c.color }}
+                title={`Highlight in ${c.label}`}
+              />
+            ))}
+          </div>
+
+          <span className="w-px h-4 bg-border/60" />
+
+          <button
+            onClick={handleAskAiAboutSelection}
+            className="flex items-center gap-1 px-2.5 py-1 rounded-xl hover:bg-muted font-medium transition-colors text-foreground"
+            title="Ask AI about this text"
+          >
+            <Sparkles className="w-3.5 h-3.5 text-purple-500" />
+            <span>Ask AI</span>
+          </button>
+        </div>
+      )}
+
+      {/* Floating Sejda-style Inline Toolbar in Edit Mode */}
       {showToolbar && (
         <div
           onMouseDown={(e) => e.stopPropagation()}
-          className="absolute flex items-center gap-1.5 p-1 bg-white border border-slate-200 shadow-xl rounded-lg z-50 transition-all select-none"
+          className="absolute flex items-center gap-1.5 p-1 bg-background/95 dark:bg-slate-900/95 backdrop-blur-xl border border-border/80 shadow-2xl rounded-xl z-50 transition-all select-none text-foreground font-sans pointer-events-auto"
           style={{
             left: Math.max(10, activeX * scale),
-            top: activeY * scale - 46,
+            top: Math.max(10, activeY * scale - 46),
           }}
         >
           {/* Bold Button */}
           <button
             onClick={handleToggleBold}
-            className={`w-7 h-7 flex items-center justify-center rounded text-sm font-bold border border-transparent transition-colors hover:bg-slate-100 ${isBold ? 'bg-emerald-50 border-emerald-200 text-emerald-600' : 'text-slate-700'}`}
+            className={`w-7 h-7 flex items-center justify-center rounded text-sm font-bold border border-transparent transition-colors hover:bg-muted ${
+              isBold ? 'bg-emerald-50 dark:bg-emerald-950/30 border-emerald-200 text-emerald-600' : 'text-foreground'
+            }`}
             title="Bold"
           >
             B
           </button>
-          
+
           {/* Italic Button */}
           <button
             onClick={handleToggleItalic}
-            className={`w-7 h-7 flex items-center justify-center rounded text-sm italic border border-transparent transition-colors hover:bg-slate-100 ${isItalic ? 'bg-emerald-50 border-emerald-200 text-emerald-600' : 'text-slate-700'}`}
+            className={`w-7 h-7 flex items-center justify-center rounded text-sm italic border border-transparent transition-colors hover:bg-muted ${
+              isItalic ? 'bg-emerald-50 dark:bg-emerald-950/30 border-emerald-200 text-emerald-600' : 'text-foreground'
+            }`}
             title="Italic"
           >
             I
           </button>
 
-          <span className="w-px h-5 bg-slate-200" />
+          <span className="w-px h-5 bg-border/60" />
 
           {/* Font Size Selector */}
           <div className="relative flex items-center">
@@ -591,15 +727,15 @@ export function TextLayer({ pdfDoc, canvasEl, containerEl }: TextLayerProps) {
                 setShowFontDropdown(false)
                 setShowColorDropdown(false)
               }}
-              className="h-7 px-2 flex items-center gap-1 rounded text-xs border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 font-medium"
+              className="h-7 px-2 flex items-center gap-1 rounded text-xs border border-border/60 bg-background hover:bg-muted text-foreground font-medium"
               title="Font Size"
             >
               <span>{Math.round(editSize)}</span>
-              <span className="text-[10px] text-slate-400">▼</span>
+              <span className="text-[10px] text-muted-foreground">▼</span>
             </button>
-            
+
             {showSizeDropdown && (
-              <div className="absolute top-8 left-0 flex flex-col max-h-48 overflow-y-auto bg-white border border-slate-200 shadow-lg rounded-md z-50 p-1 min-w-[70px]">
+              <div className="absolute top-8 left-0 flex flex-col max-h-48 overflow-y-auto bg-background border border-border/80 shadow-lg rounded-md z-50 p-1 min-w-[70px]">
                 <input
                   type="number"
                   value={Math.round(editSize)}
@@ -607,7 +743,7 @@ export function TextLayer({ pdfDoc, canvasEl, containerEl }: TextLayerProps) {
                     const val = parseInt(e.target.value) || 12
                     handleChangeFontSize(val)
                   }}
-                  className="w-full text-xs px-1.5 py-1 border border-slate-200 rounded focus:outline-none focus:border-emerald-500 mb-1"
+                  className="w-full text-xs px-1.5 py-1 border border-border rounded focus:outline-none focus:border-emerald-500 mb-1 bg-background text-foreground"
                   min="4"
                   max="120"
                 />
@@ -618,7 +754,9 @@ export function TextLayer({ pdfDoc, canvasEl, containerEl }: TextLayerProps) {
                       handleChangeFontSize(sz)
                       setShowSizeDropdown(false)
                     }}
-                    className={`text-left text-xs px-2 py-1.5 rounded hover:bg-slate-100 transition-colors ${Math.round(editSize) === sz ? 'bg-emerald-50 text-emerald-600 font-semibold' : 'text-slate-700'}`}
+                    className={`text-left text-xs px-2 py-1.5 rounded hover:bg-muted transition-colors ${
+                      Math.round(editSize) === sz ? 'bg-emerald-50 dark:bg-emerald-950/30 text-emerald-600 font-semibold' : 'text-foreground'
+                    }`}
                   >
                     {sz}
                   </button>
@@ -635,15 +773,15 @@ export function TextLayer({ pdfDoc, canvasEl, containerEl }: TextLayerProps) {
                 setShowSizeDropdown(false)
                 setShowColorDropdown(false)
               }}
-              className="h-7 px-2 flex items-center gap-1 rounded text-xs border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 font-medium max-w-[150px] truncate"
+              className="h-7 px-2 flex items-center gap-1 rounded text-xs border border-border/60 bg-background hover:bg-muted text-foreground font-medium max-w-[150px] truncate"
               title="Font Family"
             >
               <span>{METRIC_FONTS[editFamilyKey]?.displayName.split(' ')[0] || 'Arial'}</span>
-              <span className="text-[10px] text-slate-400">▼</span>
+              <span className="text-[10px] text-muted-foreground">▼</span>
             </button>
-            
+
             {showFontDropdown && (
-              <div className="absolute top-8 left-0 flex flex-col bg-white border border-slate-200 shadow-lg rounded-md z-50 p-1 min-w-[180px]">
+              <div className="absolute top-8 left-0 flex flex-col bg-background border border-border/80 shadow-lg rounded-md z-50 p-1 min-w-[180px]">
                 {Object.entries(METRIC_FONTS).map(([key, f]) => (
                   <button
                     key={key}
@@ -651,7 +789,9 @@ export function TextLayer({ pdfDoc, canvasEl, containerEl }: TextLayerProps) {
                       handleChangeFontFamily(key)
                       setShowFontDropdown(false)
                     }}
-                    className={`text-left text-xs px-2.5 py-2 rounded hover:bg-slate-100 transition-colors ${editFamilyKey === key ? 'bg-emerald-50 text-emerald-600 font-semibold' : 'text-slate-700'}`}
+                    className={`text-left text-xs px-2.5 py-2 rounded hover:bg-muted transition-colors ${
+                      editFamilyKey === key ? 'bg-emerald-50 dark:bg-emerald-950/30 text-emerald-600 font-semibold' : 'text-foreground'
+                    }`}
                     style={{ fontFamily: f.cssName }}
                   >
                     {f.displayName}
@@ -661,7 +801,7 @@ export function TextLayer({ pdfDoc, canvasEl, containerEl }: TextLayerProps) {
             )}
           </div>
 
-          <span className="w-px h-5 bg-slate-200" />
+          <span className="w-px h-5 bg-border/60" />
 
           {/* Color Picker */}
           <div className="relative">
@@ -671,17 +811,14 @@ export function TextLayer({ pdfDoc, canvasEl, containerEl }: TextLayerProps) {
                 setShowFontDropdown(false)
                 setShowSizeDropdown(false)
               }}
-              className="w-7 h-7 flex items-center justify-center rounded border border-slate-200 bg-white hover:bg-slate-50"
+              className="w-7 h-7 flex items-center justify-center rounded border border-border/60 bg-background hover:bg-muted"
               title="Text Color"
             >
-              <span
-                className="w-4 h-4 rounded-full border border-slate-300"
-                style={{ backgroundColor: editColor }}
-              />
+              <span className="w-4 h-4 rounded-full border border-border" style={{ backgroundColor: editColor }} />
             </button>
-            
+
             {showColorDropdown && (
-              <div className="absolute top-8 left-0 bg-white border border-slate-200 shadow-lg rounded-md z-50 p-2 min-w-[150px] flex flex-col gap-2">
+              <div className="absolute top-8 left-0 bg-background border border-border/80 shadow-lg rounded-md z-50 p-2 min-w-[150px] flex flex-col gap-2">
                 <div className="grid grid-cols-5 gap-1">
                   {['#000000', '#ef4444', '#f59e0b', '#10b981', '#3b82f6', '#8b5cf6', '#ec4899', '#6b7280', '#9ca3af', '#ffffff'].map((c) => (
                     <button
@@ -690,48 +827,17 @@ export function TextLayer({ pdfDoc, canvasEl, containerEl }: TextLayerProps) {
                         handleChangeColor(c)
                         setShowColorDropdown(false)
                       }}
-                      className="w-5 h-5 rounded-full border border-slate-300 transition-transform hover:scale-110"
+                      className="w-5 h-5 rounded-full border border-border transition-transform hover:scale-110"
                       style={{ backgroundColor: c }}
                       title={c}
                     />
                   ))}
                 </div>
-                <div className="flex items-center gap-1 border-t border-slate-100 pt-1.5">
-                  <span className="text-[10px] text-slate-400 font-bold">#</span>
-                  <input
-                    type="text"
-                    value={editColor.replace('#', '')}
-                    onChange={(e) => {
-                      const hex = e.target.value.substring(0, 6)
-                      handleChangeColor(`#${hex}`)
-                    }}
-                    placeholder="000000"
-                    className="w-18 text-[11px] px-1 py-0.5 border border-slate-200 rounded focus:outline-none focus:border-emerald-500 font-mono"
-                  />
-                </div>
               </div>
             )}
           </div>
 
-          <span className="w-px h-5 bg-slate-200" />
-
-          {/* Link Indicator (Placeholder Icon) */}
-          <button
-            className="w-7 h-7 flex items-center justify-center rounded text-slate-400 hover:text-slate-600 transition-colors"
-            title="Link (Visual indicator)"
-          >
-            🔗
-          </button>
-
-          {/* Move Indicator */}
-          <button
-            className="w-7 h-7 flex items-center justify-center rounded text-slate-400 cursor-move"
-            title="Drag text to move"
-          >
-            ✥
-          </button>
-
-          <span className="w-px h-5 bg-slate-200" />
+          <span className="w-px h-5 bg-border/60" />
 
           {/* Duplicate Button */}
           <button
@@ -744,7 +850,7 @@ export function TextLayer({ pdfDoc, canvasEl, containerEl }: TextLayerProps) {
                 }
               }
             }}
-            className="w-7 h-7 flex items-center justify-center rounded text-slate-500 hover:text-emerald-600 hover:bg-emerald-50 transition-colors"
+            className="w-7 h-7 flex items-center justify-center rounded text-muted-foreground hover:text-emerald-600 hover:bg-muted transition-colors"
             title="Duplicate"
           >
             📋
@@ -766,46 +872,11 @@ export function TextLayer({ pdfDoc, canvasEl, containerEl }: TextLayerProps) {
                 }
               }
             }}
-            className="w-7 h-7 flex items-center justify-center rounded text-slate-500 hover:text-red-600 hover:bg-red-50 transition-colors"
+            className="w-7 h-7 flex items-center justify-center rounded text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors"
             title="Delete text"
           >
             🗑️
           </button>
-
-          {/* Revert Button */}
-          {!activeEdit?.isDuplicate && activeEdit && (
-            <button
-              onClick={() => {
-                if (activeItem) {
-                  removeTextEdit(activeItem.id)
-                  setSelectedEditId(null)
-                }
-              }}
-              className="w-7 h-7 flex items-center justify-center rounded text-slate-500 hover:text-amber-600 hover:bg-amber-50 transition-colors font-semibold"
-              title="Revert to original PDF text"
-            >
-              ↺
-            </button>
-          )}
-        </div>
-      )}
-
-      {/* Line boundaries visualization in edit mode (debug toggle) */}
-      {isEditMode && textLines.length > 0 && (
-        <div className="pointer-events-none absolute inset-0" style={{ zIndex: -1 }}>
-          {textLines.map((line, i) => (
-            <div
-              key={`line-${i}`}
-              className="border-l-2 border-emerald-300/30"
-              style={{
-                position: 'absolute',
-                left: line.x * scale,
-                top: line.y * scale,
-                width: line.width * scale,
-                height: line.height * scale,
-              }}
-            />
-          ))}
         </div>
       )}
     </div>

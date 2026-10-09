@@ -279,6 +279,12 @@ interface AppState {
   // PDF processing
   processPdfFile: (file: File) => void
 
+  // Clipboard
+  copiedText: string | null
+  setCopiedText: (text: string | null) => void
+  copiedAnnot: PDFAnnotation | null
+  setCopiedAnnot: (annot: PDFAnnotation | null) => void
+
   // Undo/Redo history
   saveToUndoStack: () => void
   _undoStack: PDFAnnotation[][]
@@ -580,6 +586,12 @@ export const useAppStore = create<AppState>()(
   })),
   isEditorLoading: false,
   setEditorLoading: (loading) => set({ isEditorLoading: loading }),
+
+  // Clipboard
+  copiedText: null,
+  setCopiedText: (text) => set({ copiedText: text }),
+  copiedAnnot: null,
+  setCopiedAnnot: (annot) => set({ copiedAnnot: annot }),
 
   // Drawing state
   isDrawing: false,

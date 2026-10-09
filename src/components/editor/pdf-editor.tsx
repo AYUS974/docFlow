@@ -103,13 +103,18 @@ export function PdfEditor() {
     updateDocument, updateAnnotation,
     bringToFront, sendToBack, removeAnnotationsByIds,
     saveToUndoStack,
+    copiedText, setCopiedText,
+    copiedAnnot, setCopiedAnnot,
   } = useAppStore()
 
   const [scrollMode, setScrollMode] = useState<'continuous' | 'single'>('continuous')
   const canvasRefs = useRef<{ [key: number]: HTMLCanvasElement | null }>({})
   const overlayCanvasRefs = useRef<{ [key: number]: HTMLCanvasElement | null }>({})
   const renderTasksRef = useRef<{ [key: number]: pdfjsLib.RenderTask | null }>({})
+  const pageRenderLocksRef = useRef<{ [key: number]: boolean }>({})
+  const pageRenderPendingRef = useRef<{ [key: number]: boolean }>({})
   const activeInteractionPageRef = useRef<number>(1)
+  const lastMousePosRef = useRef<{ x: number; y: number; pageNumber: number } | null>(null)
 
   // Backward-compatible getters for existing single-page helpers
   const canvasRef = {
@@ -175,6 +180,7 @@ export function PdfEditor() {
     canvasCoords: { x: 0, y: 0 },
   })
   const [showThumbnailStrip, setShowThumbnailStrip] = useState(false)
+  const clipboardAnnotRef = useRef<PDFAnnotation | null>(null)
   
   // High-level editor modes: 'view' | 'annotate' | 'edit' | 'sign'
   type EditorMode = 'view' | 'annotate' | 'edit' | 'sign'
@@ -350,53 +356,6 @@ export function PdfEditor() {
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [selectedAnnotId, removeAnnotation])
 
-  // Render a single PDF page into its designated canvas
-  const renderSinglePage = useCallback(async (pageNumber: number) => {
-    const pdf = pdfDocRef.current
-    const canvas = canvasRefs.current[pageNumber]
-    if (!pdf || !canvas || pageNumber < 1 || pageNumber > pdf.numPages) return
-
-    if (renderTasksRef.current[pageNumber]) {
-      try { renderTasksRef.current[pageNumber]?.cancel() } catch { /* settled */ }
-      renderTasksRef.current[pageNumber] = null
-    }
-
-    try {
-      const page = await pdf.getPage(pageNumber)
-      const rotation = pageRotations.get(pageNumber) || 0
-      const viewport = page.getViewport({ scale: zoom * 1.5, rotation })
-      canvas.width = viewport.width
-      canvas.height = viewport.height
-      const ctx = canvas.getContext('2d')!
-      const task = page.render({ canvasContext: ctx, viewport })
-      renderTasksRef.current[pageNumber] = task
-      await task.promise
-      renderTasksRef.current[pageNumber] = null
-      renderPageAnnotations(pageNumber)
-    } catch (err: any) {
-      if (err?.name !== 'RenderingCancelledException') {
-        console.error(`Failed to render page ${pageNumber}:`, err)
-      }
-    }
-  }, [zoom, pdfReady, pageRotations])
-
-  // Render pages based on current scroll mode
-  const renderPages = useCallback(async () => {
-    const pdf = pdfDocRef.current
-    if (!pdf || totalPages === 0) return
-    setIsRendering(true)
-    try {
-      const pages = scrollMode === 'continuous'
-        ? (pageOrder.length > 0 ? pageOrder : Array.from({ length: totalPages }, (_, i) => i + 1))
-        : [currentPage]
-      await Promise.all(pages.map(p => renderSinglePage(p)))
-    } finally {
-      setIsRendering(false)
-    }
-  }, [scrollMode, totalPages, pageOrder, currentPage, renderSinglePage])
-
-  useEffect(() => { renderPages() }, [renderPages])
-
   // Render annotations overlay for a specific page
   const renderPageAnnotations = useCallback((pageNumber: number) => {
     const overlay = overlayCanvasRefs.current[pageNumber]
@@ -438,10 +397,31 @@ export function PdfEditor() {
     for (const annot of pageAnnots) {
       ctx.save()
       switch (annot.type) {
-        case 'highlight':
-          ctx.fillStyle = annot.color + '40'
+        case 'highlight': {
+          let baseColor = annot.color || '#f59e0b'
+          if (baseColor.startsWith('#')) {
+            const raw = baseColor.replace('#', '')
+            if (raw.length === 3) {
+              const r = parseInt(raw[0] + raw[0], 16)
+              const g = parseInt(raw[1] + raw[1], 16)
+              const b = parseInt(raw[2] + raw[2], 16)
+              ctx.fillStyle = `rgba(${r}, ${g}, ${b}, 0.35)`
+            } else if (raw.length >= 6) {
+              const r = parseInt(raw.substring(0, 2), 16)
+              const g = parseInt(raw.substring(2, 4), 16)
+              const b = parseInt(raw.substring(4, 6), 16)
+              ctx.fillStyle = `rgba(${r}, ${g}, ${b}, 0.35)`
+            } else {
+              ctx.fillStyle = 'rgba(245, 158, 11, 0.35)'
+            }
+          } else if (baseColor.startsWith('rgb')) {
+            ctx.fillStyle = baseColor.replace('rgb', 'rgba').replace(')', ', 0.35)')
+          } else {
+            ctx.fillStyle = 'rgba(245, 158, 11, 0.35)'
+          }
           ctx.fillRect(annot.x * scale, annot.y * scale, (annot.width || 100) * scale, (annot.height || 30) * scale)
           break
+        }
         case 'draw':
           if (annot.points && annot.points.length > 1) {
             ctx.strokeStyle = annot.color
@@ -564,6 +544,96 @@ export function PdfEditor() {
       }
     }
   }, [annotations, currentPage, zoom, textEdits, isCropping, cropBox, selectedAnnotId])
+
+  // Render a single PDF page into its designated canvas safely without collisions
+  const renderSinglePage = useCallback(async (pageNumber: number) => {
+    const pdf = pdfDocRef.current
+    const canvas = canvasRefs.current[pageNumber]
+    if (!pdf || !canvas || pageNumber < 1 || pageNumber > pdf.numPages) return
+
+    // If already rendering this page, mark a pending re-render and cancel current task
+    if (pageRenderLocksRef.current[pageNumber]) {
+      pageRenderPendingRef.current[pageNumber] = true
+      if (renderTasksRef.current[pageNumber]) {
+        try {
+          renderTasksRef.current[pageNumber]?.cancel()
+        } catch { /* settled */ }
+      }
+      return
+    }
+
+    pageRenderLocksRef.current[pageNumber] = true
+
+    try {
+      while (true) {
+        pageRenderPendingRef.current[pageNumber] = false
+
+        // Cancel previous task if lingering and wait for it to detach
+        if (renderTasksRef.current[pageNumber]) {
+          try {
+            const oldTask = renderTasksRef.current[pageNumber]
+            renderTasksRef.current[pageNumber] = null
+            oldTask?.cancel()
+            await oldTask?.promise.catch(() => {})
+          } catch { /* settled */ }
+        }
+
+        const page = await pdf.getPage(pageNumber)
+        const rotation = pageRotations.get(pageNumber) || 0
+        const viewport = page.getViewport({ scale: zoom * 1.5, rotation })
+        canvas.width = viewport.width
+        canvas.height = viewport.height
+        const ctx = canvas.getContext('2d')!
+        
+        const task = page.render({ canvasContext: ctx, viewport })
+        renderTasksRef.current[pageNumber] = task
+
+        try {
+          await task.promise
+        } catch (taskErr: any) {
+          if (taskErr?.name !== 'RenderingCancelledException' && !taskErr?.message?.includes('cancelled')) {
+            console.error(`Failed to render page ${pageNumber}:`, taskErr)
+          }
+        } finally {
+          if (renderTasksRef.current[pageNumber] === task) {
+            renderTasksRef.current[pageNumber] = null
+          }
+        }
+
+        renderPageAnnotations(pageNumber)
+
+        // If another render was queued during our run, loop to render latest state
+        if (!pageRenderPendingRef.current[pageNumber]) {
+          break
+        }
+      }
+    } catch (err: any) {
+      if (err?.name !== 'RenderingCancelledException' && !err?.message?.includes('cancelled')) {
+        console.error(`Render page ${pageNumber} error:`, err)
+      }
+    } finally {
+      pageRenderLocksRef.current[pageNumber] = false
+    }
+  }, [zoom, pdfReady, pageRotations, renderPageAnnotations])
+
+  // Render pages based on current scroll mode
+  const renderPages = useCallback(async () => {
+    const pdf = pdfDocRef.current
+    if (!pdf || totalPages === 0) return
+    setIsRendering(true)
+    try {
+      const pages = scrollMode === 'continuous'
+        ? (pageOrder.length > 0 ? pageOrder : Array.from({ length: totalPages }, (_, i) => i + 1))
+        : [currentPage]
+      await Promise.all(pages.map(p => renderSinglePage(p)))
+    } finally {
+      setIsRendering(false)
+    }
+  }, [scrollMode, totalPages, pageOrder, currentPage, renderSinglePage])
+
+  useEffect(() => { renderPages() }, [renderPages])
+
+
 
   const renderAllAnnotations = useCallback(() => {
     const pages = scrollMode === 'continuous'
@@ -1595,17 +1665,192 @@ export function PdfEditor() {
       showStatus('OCR failed')
     } finally { setProcessing('') }
   }
+  // Helper to spawn a new text annotation from clipboard
+  const pasteText = (text: string, coords?: { x: number; y: number }, targetPage?: number) => {
+    const pageNum = targetPage || activeInteractionPageRef.current || currentPage
+    const posX = Math.max(10, coords?.x ?? (lastMousePosRef.current?.pageNumber === pageNum ? lastMousePosRef.current.x : 120))
+    const posY = Math.max(30, coords?.y ?? (lastMousePosRef.current?.pageNumber === pageNum ? lastMousePosRef.current.y : 120))
+    const newId = crypto.randomUUID()
+    saveToUndoStack()
+    addAnnotation({
+      id: newId,
+      type: 'text',
+      pageNumber: pageNum,
+      x: posX,
+      y: posY,
+      content: text,
+      fontSize: fontSize || 16,
+      fontFamily: fontFamily || 'Helvetica',
+      color: drawColor || '#000000',
+    })
+    setSelectedAnnotId(newId)
+    setCurrentTool('select')
+    showStatus('Pasted text from clipboard')
+  }
+
+  const handleCopyAnnot = (annot: PDFAnnotation) => {
+    clipboardAnnotRef.current = annot
+    setCopiedAnnot(annot)
+    if (annot.content) {
+      setCopiedText(annot.content)
+      try {
+        if (typeof navigator !== 'undefined' && navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(annot.content).catch(() => {})
+        }
+      } catch {}
+    }
+    showStatus('Copied to clipboard')
+  }
+
+  const handlePaste = async (coords?: { x: number; y: number }, targetPage?: number) => {
+    const pageNum = targetPage || activeInteractionPageRef.current || currentPage
+    const posX = Math.max(10, coords?.x ?? (lastMousePosRef.current?.pageNumber === pageNum ? lastMousePosRef.current.x : 120))
+    const posY = Math.max(30, coords?.y ?? (lastMousePosRef.current?.pageNumber === pageNum ? lastMousePosRef.current.y : 120))
+
+    // 1. Try reading text from system clipboard
+    try {
+      if (typeof navigator !== 'undefined' && navigator.clipboard && navigator.clipboard.readText) {
+        const text = await navigator.clipboard.readText()
+        if (text && text.trim()) {
+          setCopiedText(text.trim())
+          pasteText(text.trim(), { x: posX, y: posY }, pageNum)
+          return
+        }
+      }
+    } catch {
+      // Async clipboard read permission denied or document not focused; fall through to memory buffer
+    }
+
+    // 2. Check internal stored text (from selection toolbar or previous copy)
+    if (copiedText && copiedText.trim()) {
+      pasteText(copiedText.trim(), { x: posX, y: posY }, pageNum)
+      return
+    }
+
+    // 3. Fallback to memory copied annotation
+    const annotToPaste = copiedAnnot || clipboardAnnotRef.current
+    if (annotToPaste) {
+      const newId = crypto.randomUUID()
+      saveToUndoStack()
+      addAnnotation({
+        ...annotToPaste,
+        id: newId,
+        pageNumber: pageNum,
+        x: posX,
+        y: posY,
+      })
+      setSelectedAnnotId(newId)
+      setCurrentTool('select')
+      showStatus('Pasted annotation')
+      return
+    }
+
+    showStatus('Clipboard is empty')
+  }
+
+  // Native clipboard events (paste & copy) listener
+  useEffect(() => {
+    const handleNativePaste = (e: ClipboardEvent) => {
+      const target = e.target as HTMLElement
+      if (target?.tagName === 'INPUT' || target?.tagName === 'TEXTAREA' || target?.isContentEditable || target?.getAttribute('contenteditable') === 'true') {
+        return
+      }
+
+      e.preventDefault()
+
+      // Check if image data is present
+      const items = e.clipboardData?.items
+      if (items) {
+        for (let i = 0; i < items.length; i++) {
+          if (items[i].type.indexOf('image') !== -1) {
+            const blob = items[i].getAsFile()
+            if (blob) {
+              const reader = new FileReader()
+              reader.onload = (event) => {
+                const dataUrl = event.target?.result as string
+                if (dataUrl) {
+                  const newId = crypto.randomUUID()
+                  const pageNum = activeInteractionPageRef.current || currentPage
+                  const posX = Math.max(10, lastMousePosRef.current?.pageNumber === pageNum ? lastMousePosRef.current.x : 100)
+                  const posY = Math.max(30, lastMousePosRef.current?.pageNumber === pageNum ? lastMousePosRef.current.y : 100)
+                  saveToUndoStack()
+                  addAnnotation({
+                    id: newId,
+                    type: 'image',
+                    pageNumber: pageNum,
+                    x: posX,
+                    y: posY,
+                    width: 200,
+                    height: 150,
+                    imageData: dataUrl,
+                    color: '#000000',
+                  })
+                  setSelectedAnnotId(newId)
+                  setCurrentTool('select')
+                  showStatus('Pasted image from clipboard')
+                }
+              }
+              reader.readAsDataURL(blob)
+              return
+            }
+          }
+        }
+      }
+
+      const text = e.clipboardData?.getData('text/plain')
+      if (text && text.trim()) {
+        setCopiedText(text.trim())
+        pasteText(text.trim())
+        return
+      }
+
+      handlePaste()
+    }
+
+    const handleNativeCopy = (e: ClipboardEvent) => {
+      const target = e.target as HTMLElement
+      if (target?.tagName === 'INPUT' || target?.tagName === 'TEXTAREA' || target?.isContentEditable || target?.getAttribute('contenteditable') === 'true') {
+        return
+      }
+
+      const selText = window.getSelection()?.toString().trim()
+      if (selText) {
+        setCopiedText(selText)
+        return
+      }
+
+      if (selectedAnnotId) {
+        const annot = annotations.find(a => a.id === selectedAnnotId)
+        if (annot) {
+          handleCopyAnnot(annot)
+        }
+      }
+    }
+
+    window.addEventListener('paste', handleNativePaste)
+    window.addEventListener('copy', handleNativeCopy)
+    return () => {
+      window.removeEventListener('paste', handleNativePaste)
+      window.removeEventListener('copy', handleNativeCopy)
+    }
+  }, [annotations, selectedAnnotId, currentPage, fontSize, fontFamily, drawColor, copiedText, copiedAnnot])
+
   // Keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement || (e.target as HTMLElement).contentEditable === 'true') return
-      const keyMap: Record<string, EditorTool> = {
-        v: 'select', h: 'pan', e: 'editText', s: 'signature', i: 'image',
-        a: 'highlight', d: 'draw', t: 'text', r: 'rectangle', o: 'ellipse',
-        l: 'line', x: 'redact', w: 'whiteout', z: 'eraser',
+
+      // Single-key tool switches (MUST NOT have Ctrl, Meta, or Alt pressed)
+      if (!e.ctrlKey && !e.metaKey && !e.altKey) {
+        const keyMap: Record<string, EditorTool> = {
+          v: 'select', h: 'pan', e: 'editText', s: 'signature', i: 'image',
+          a: 'highlight', d: 'draw', t: 'text', r: 'rectangle', o: 'ellipse',
+          l: 'line', x: 'redact', w: 'whiteout', z: 'eraser',
+        }
+        const k = e.key.toLowerCase()
+        if (keyMap[k]) { setCurrentTool(keyMap[k]); return }
       }
-      const k = e.key.toLowerCase()
-      if (keyMap[k]) { setCurrentTool(keyMap[k]); return }
+
       if (e.key === 'Escape') {
         if (textInput.visible) { setTextInput({ x: 0, y: 0, visible: false }); setTextInputValue('') }
         else if (editingTextItem) setEditingTextItem(null)
@@ -1613,7 +1858,7 @@ export function PdfEditor() {
         else goBack()
       }
       if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) { e.preventDefault(); undo() }
-      if ((e.ctrlKey || e.metaKey) && (e.key === 'Z' || (e.key === 'z' && e.shiftKey))) { e.preventDefault(); redo() }
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'Z' || (e.key === 'z' && e.shiftKey) || e.key.toLowerCase() === 'y')) { e.preventDefault(); redo() }
       if (e.key === '+' || e.key === '=') setZoom(zoom + 0.1)
       if (e.key === '-') setZoom(zoom - 0.1)
       if (e.key === '0' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); setZoom(1) }
@@ -1625,6 +1870,25 @@ export function PdfEditor() {
         e.preventDefault()
         const annot = annotations.find(a => a.id === selectedAnnotId)
         if (annot) handleDuplicateAnnot(annot)
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'v') {
+        e.preventDefault()
+        handlePaste()
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'c') {
+        const selText = window.getSelection()?.toString().trim()
+        if (selText) {
+          setCopiedText(selText)
+          try {
+            navigator.clipboard?.writeText(selText).catch(() => {})
+          } catch {}
+          showStatus('Text copied to clipboard')
+        } else if (selectedAnnotId) {
+          const annot = annotations.find(a => a.id === selectedAnnotId)
+          if (annot) {
+            handleCopyAnnot(annot)
+          }
+        }
       }
       if (e.key === 'PageDown' || ((e.key === 'ArrowRight' || e.key === 'ArrowDown') && (e.altKey || currentTool === 'select' || currentTool === 'pan'))) {
         if (currentPage < totalPages) {
@@ -1639,7 +1903,7 @@ export function PdfEditor() {
         }
       }
       if (e.key === '?') setShowShortcuts(true)
-      if (e.key === 'Delete' && selectedAnnotId) {
+      if ((e.key === 'Delete' || e.key === 'Backspace') && selectedAnnotId) {
         saveToUndoStack()
         removeAnnotation(selectedAnnotId)
         setSelectedAnnotId(null)
@@ -1648,7 +1912,7 @@ export function PdfEditor() {
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [setCurrentTool, goBack, setZoom, zoom, undo, redo, textInput.visible, editingTextItem, setEditingTextItem, isCropping, setCropping, currentTool, currentPage, totalPages, setCurrentPage, selectedAnnotId, annotations, removeAnnotation])
+  }, [setCurrentTool, goBack, setZoom, zoom, undo, redo, textInput.visible, editingTextItem, setEditingTextItem, isCropping, setCropping, currentTool, currentPage, totalPages, setCurrentPage, selectedAnnotId, annotations, removeAnnotation, copiedText, copiedAnnot])
 
   const handleContextMenu = (e: React.MouseEvent, pageNum: number) => {
     e.preventDefault()
@@ -2346,7 +2610,14 @@ export function PdfEditor() {
                     </div>
                   )}
 
-                  <div className="pdf-canvas-container shadow-2xl rounded-lg overflow-hidden relative border border-border/30 bg-white">
+                  <div
+                    className="pdf-canvas-container shadow-2xl rounded-lg overflow-hidden relative border border-border/30 bg-white"
+                    onContextMenu={(e) => handleContextMenu(e, pageNum)}
+                    onMouseMove={(e) => {
+                      const coords = getCanvasCoords(e, pageNum)
+                      lastMousePosRef.current = { x: coords.x, y: coords.y, pageNumber: pageNum }
+                    }}
+                  >
                     {/* Text input overlay for add-text tool */}
                     {textInput.visible && isCurrent && (
                       <div className="absolute z-20" style={{
@@ -2377,14 +2648,14 @@ export function PdfEditor() {
                       ref={(el) => { overlayCanvasRefs.current[pageNum] = el }}
                       className="absolute top-0 left-0"
                       style={{
-                        pointerEvents: currentTool === 'editText' ? 'none' : 'auto',
+                        pointerEvents: (currentTool === 'editText' || currentTool === 'select' || currentTool === 'highlight') ? 'none' : 'auto',
                         cursor: isPanMode
                           ? (isPanning ? 'grabbing' : 'grab')
                           : isCropping
                           ? 'crosshair'
                           : currentTool === 'text'
                           ? 'text'
-                          : ['draw', 'rectangle', 'ellipse', 'line', 'whiteout', 'redact', 'highlight'].includes(currentTool)
+                          : ['draw', 'rectangle', 'ellipse', 'line', 'whiteout', 'redact'].includes(currentTool)
                           ? 'crosshair'
                           : currentTool === 'eraser'
                           ? 'cell'
@@ -2395,7 +2666,7 @@ export function PdfEditor() {
                       onMouseDown={(e) => { if (isPanMode) handlePanStart(e); else handlePointerDown(e, pageNum) }}
                       onMouseMove={(e) => { if (isPanning) handlePanMove(e); else handlePointerMove(e, pageNum) }}
                       onMouseUp={(e) => { if (isPanning) handlePanEnd(); else handlePointerUp(e, pageNum) }}
-                      onMouseLeave={() => { if (isPanning) handlePanEnd(); else handlePointerUp({} as any, pageNum) }}
+                      onMouseLeave={(e) => { if (isPanning) handlePanEnd(); else handlePointerUp({} as any, pageNum) }}
                       onClick={(e) => handleCanvasClick(e, pageNum)}
                       onDoubleClick={handleCanvasDoubleClick}
                       onContextMenu={(e) => handleContextMenu(e, pageNum)}
@@ -2425,10 +2696,8 @@ export function PdfEditor() {
                           />
                         )
                       })}
-                    {/* Native text editing layer */}
-                    {isCurrent && (
-                      <TextLayer pdfDoc={pdfDocRef.current} canvasEl={canvasRefs.current[pageNum]} containerEl={containerRef.current} />
-                    )}
+                    {/* Native text editing and text selection layer for every page */}
+                    <TextLayer pageNumber={pageNum} pdfDoc={pdfDocRef.current} canvasEl={canvasRefs.current[pageNum]} containerEl={containerRef.current} />
                     {/* Added text annotations HTML overlay */}
                     <div 
                       className="absolute top-0 left-0 w-full h-full pointer-events-none"
@@ -2781,49 +3050,53 @@ export function PdfEditor() {
                         }}
                         onMouseDown={(e) => e.stopPropagation()}
                       >
-                        {/* Color selection for shapes / drawings */}
-                        {['draw', 'rectangle', 'ellipse', 'line'].includes(selectedAnnot.type) && (
+                        {/* Color selection for shapes / drawings / highlights */}
+                        {['draw', 'rectangle', 'ellipse', 'line', 'highlight'].includes(selectedAnnot.type) && (
                           <>
                             <div className="flex items-center gap-1 px-1">
-                              {COLORS.slice(0, 5).map((c) => (
+                              {COLORS.slice(0, 7).map((c) => (
                                 <button
                                   key={c}
-                                  className={`w-4 h-4 rounded-full border transition-all ${selectedAnnot.color === c ? 'scale-125 border-foreground shadow-xs' : 'border-transparent opacity-70 hover:opacity-100 hover:scale-110'}`}
+                                  className={`w-4 h-4 rounded-full border transition-all ${selectedAnnot.color === c ? 'scale-125 border-foreground shadow-xs ring-2 ring-emerald-500' : 'border-transparent opacity-70 hover:opacity-100 hover:scale-110'}`}
                                   style={{ backgroundColor: c }}
                                   onClick={() => updateAnnotation(selectedAnnot.id, { color: c })}
                                 />
                               ))}
                             </div>
                             <Separator orientation="vertical" className="h-4" />
-                            {/* Stroke width */}
-                            <div className="flex items-center gap-0.5">
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                className="h-6 w-6 rounded-md"
-                                onClick={() => {
-                                  const nextW = Math.max(1, (selectedAnnot.strokeWidth || strokeWidth) - 1)
-                                  setStrokeWidth(nextW)
-                                  updateAnnotation(selectedAnnot.id, { strokeWidth: nextW })
-                                }}
-                              >
-                                <Minus className="w-3 h-3" />
-                              </Button>
-                              <span className="text-[11px] font-mono w-5 text-center">{selectedAnnot.strokeWidth || strokeWidth}</span>
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                className="h-6 w-6 rounded-md"
-                                onClick={() => {
-                                  const nextW = Math.min(20, (selectedAnnot.strokeWidth || strokeWidth) + 1)
-                                  setStrokeWidth(nextW)
-                                  updateAnnotation(selectedAnnot.id, { strokeWidth: nextW })
-                                }}
-                              >
-                                <Plus className="w-3 h-3" />
-                              </Button>
-                            </div>
-                            <Separator orientation="vertical" className="h-4" />
+                            {/* Stroke width (only for vector strokes) */}
+                            {['draw', 'rectangle', 'ellipse', 'line'].includes(selectedAnnot.type) && (
+                              <>
+                                <div className="flex items-center gap-0.5">
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-6 w-6 rounded-md"
+                                    onClick={() => {
+                                      const nextW = Math.max(1, (selectedAnnot.strokeWidth || strokeWidth) - 1)
+                                      setStrokeWidth(nextW)
+                                      updateAnnotation(selectedAnnot.id, { strokeWidth: nextW })
+                                    }}
+                                  >
+                                    <Minus className="w-3 h-3" />
+                                  </Button>
+                                  <span className="text-[11px] font-mono w-5 text-center">{selectedAnnot.strokeWidth || strokeWidth}</span>
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-6 w-6 rounded-md"
+                                    onClick={() => {
+                                      const nextW = Math.min(20, (selectedAnnot.strokeWidth || strokeWidth) + 1)
+                                      setStrokeWidth(nextW)
+                                      updateAnnotation(selectedAnnot.id, { strokeWidth: nextW })
+                                    }}
+                                  >
+                                    <Plus className="w-3 h-3" />
+                                  </Button>
+                                </div>
+                                <Separator orientation="vertical" className="h-4" />
+                              </>
+                            )}
                           </>
                         )}
 
@@ -2928,14 +3201,26 @@ export function PdfEditor() {
             })}
           </div>
 
+          {/* Page Thumbnails Floating Strip */}
+          <PdfThumbnailStrip
+            isOpen={showThumbnailStrip}
+            thumbnails={pageThumbnails}
+            currentPage={currentPage}
+            onSelectPage={(p) => {
+              handlePageSelect(p)
+              setShowThumbnailStrip(false)
+            }}
+            onClose={() => setShowThumbnailStrip(false)}
+          />
+
           {/* ===== FLOATING BOTTOM PAGE CAPSULE ===== */}
-          <div className="fixed md:absolute bottom-4 left-1/2 -translate-x-1/2 z-30 flex items-center gap-1.5 sm:gap-2 px-3 py-1.5 bg-background/90 dark:bg-slate-900/90 backdrop-blur-xl border border-border/70 shadow-2xl rounded-full text-xs select-none max-w-[95vw] overflow-x-auto">
+          <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-30 flex items-center gap-1.5 sm:gap-2 px-3 py-1.5 bg-background/95 dark:bg-slate-900/95 backdrop-blur-xl border border-border/80 shadow-2xl rounded-full text-xs select-none whitespace-nowrap">
             {/* View Mode Toggle: Continuous vs Single */}
             <div className="flex items-center bg-muted/70 p-0.5 rounded-full shrink-0">
               <Button
                 variant="ghost"
                 size="sm"
-                className={`h-6 px-2 text-[11px] rounded-full gap-1 transition-all ${
+                className={`h-6 px-2 text-[11px] rounded-full gap-1 transition-colors ${
                   scrollMode === 'continuous'
                     ? 'bg-background text-foreground shadow-xs font-semibold'
                     : 'text-muted-foreground hover:text-foreground'
@@ -2949,7 +3234,7 @@ export function PdfEditor() {
               <Button
                 variant="ghost"
                 size="sm"
-                className={`h-6 px-2 text-[11px] rounded-full gap-1 transition-all ${
+                className={`h-6 px-2 text-[11px] rounded-full gap-1 transition-colors ${
                   scrollMode === 'single'
                     ? 'bg-background text-foreground shadow-xs font-semibold'
                     : 'text-muted-foreground hover:text-foreground'
@@ -2977,29 +3262,18 @@ export function PdfEditor() {
             >
               <ChevronLeft className="w-3.5 h-3.5" />
             </Button>
-            <div
-              className="relative shrink-0"
-              onMouseEnter={() => setShowThumbnailStrip(true)}
-              onMouseLeave={() => setShowThumbnailStrip(false)}
+            
+            <button
+              type="button"
+              onClick={() => setShowThumbnailStrip(!showThumbnailStrip)}
+              className={`text-xs font-medium px-2 py-0.5 rounded-full transition-colors cursor-pointer flex items-center gap-1 shrink-0 tabular-nums ${
+                showThumbnailStrip ? 'bg-muted text-foreground' : 'hover:bg-muted/80 text-muted-foreground hover:text-foreground'
+              }`}
+              title="Click to preview page thumbnails"
             >
-              <button
-                type="button"
-                onClick={() => setShowThumbnailStrip(!showThumbnailStrip)}
-                className="text-xs font-medium px-1.5 py-0.5 rounded-full hover:bg-muted/80 transition-colors cursor-pointer flex items-center gap-1"
-                title="Click or hover to preview page thumbnails"
-              >
-                Page <span className="font-semibold text-foreground">{currentPage}</span> of {totalPages}
-              </button>
-              <PdfThumbnailStrip
-                isOpen={showThumbnailStrip}
-                thumbnails={pageThumbnails}
-                currentPage={currentPage}
-                onSelectPage={(p) => {
-                  handlePageSelect(p)
-                  setShowThumbnailStrip(false)
-                }}
-              />
-            </div>
+              Page <span className="font-semibold text-foreground">{currentPage}</span> of {totalPages}
+            </button>
+
             <Button
               variant="ghost"
               size="icon"
@@ -3020,7 +3294,7 @@ export function PdfEditor() {
             >
               <Minus className="w-3 h-3" />
             </Button>
-            <span className="font-mono text-[11px] text-muted-foreground w-8 text-center shrink-0">{Math.round(zoom * 100)}%</span>
+            <span className="font-mono text-[11px] text-muted-foreground w-9 text-center shrink-0 tabular-nums">{Math.round(zoom * 100)}%</span>
             <Button
               variant="ghost"
               size="icon"
@@ -3307,6 +3581,8 @@ export function PdfEditor() {
         state={contextMenu}
         onClose={() => setContextMenu((prev) => ({ ...prev, visible: false }))}
         onDuplicate={handleDuplicateAnnot}
+        onCopyAnnot={handleCopyAnnot}
+        onPasteAt={(coords, page) => handlePaste(coords, page)}
         onDelete={(id) => {
           saveToUndoStack()
           removeAnnotation(id)
